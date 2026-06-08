@@ -1,0 +1,83 @@
+{
+  "theme_and_archetype": {
+    "theme": "LIGHT",
+    "archetype": "Archetype 4 (Swiss & High-Contrast)",
+    "reasoning": "Admin/Field Work application requires high utility, absolute clarity, and authority. The design must feel like a precision tool (control room for admins, tactile instrument for mobile field workers), using high-contrast utilitarian colors where color denotes function only."
+  },
+  "typography": {
+    "heading_font": "Cabinet Grotesk",
+    "body_font": "IBM Plex Sans",
+    "rules": [
+      "No generic sans for headings.",
+      "Use tight tracking (tracking-tight) for headings > 32px.",
+      "Labels and overlines must be Uppercase, text-xs, with wide tracking (tracking-[0.2em]).",
+      "Heading hierarchy strictly fluid, max text-6xl for largest viewports.",
+      "Data tables and timestamps MUST use IBM Plex Sans for tabular figure alignment."
+    ]
+  },
+  "colors": {
+    "background": "#F5F5F6",
+    "surface": "#FFFFFF",
+    "primary": "#0047FF",
+    "text_main": "#0D0D12",
+    "text_muted": "#52525B",
+    "status": {
+      "on_duty": "#00E676",
+      "off_duty": "#FF3B30",
+      "transit": "#FFCC00"
+    },
+    "borders": "#E4E4E7"
+  },
+  "spacing_and_layout": {
+    "admin_dashboard": {
+      "grid": "Control Room Grid",
+      "classes": "grid grid-cols-1 md:grid-cols-3 lg:grid-cols-4 gap-6",
+      "widget_rules": "Every pixel utilized. h-full on children for stretching."
+    },
+    "mobile_pwa": {
+      "padding": "Generous spacing. p-6 or p-8 for main interactive containers.",
+      "bottom_nav": "Fixed bottom nav with thick padding for mobile thumb reach."
+    }
+  },
+  "surfaces_and_components": {
+    "admin_cards": "Grid Borders strategy. Flat backgrounds, 1px subtle borders (border-border), no shadows. Visible grid lines.",
+    "mobile_interactive": "Neumorphism / Tactile strategy for Check-in toggles. Sharp 1px border to ground it with soft shadows.",
+    "header": "Solid background with a hard 1px bottom border to separate from the map/dashboard content.",
+    "map": "High-contrast map pins and thick polylines (weight: 4px). Use primary and status colors."
+  },
+  "motion": {
+    "hover": "Slight background tint shifts. Explicitly define hover text color (e.g., hover:bg-[#0047FF] hover:text-white).",
+    "transitions": "transition-transform 0.2s ease, transition-opacity 0.2s ease",
+    "loading": "Tactile, industrial loading bars (no bouncy generic spinners)."
+  },
+  "icons": {
+    "library": "@phosphor-icons/react",
+    "weight": "regular or bold for data legibility",
+    "install_command": "yarn add @phosphor-icons/react"
+  },
+  "media_urls": {
+    "login_background": {
+      "url": "https://images.unsplash.com/photo-1774646598677-cc38cb3cac00?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NDQ2Mzl8MHwxfHNlYXJjaHwxfHxhYnN0cmFjdCUyMG1hcCUyMHRvcG9ncmFwaHklMjBiYWNrZ3JvdW5kfGVufDB8fHx8MTc4MDg5NDk4Nnww&ixlib=rb-4.1.0&q=85",
+      "description": "Abstract topographic map background for the authentication/login screen."
+    },
+    "brand_logo_placeholder": {
+      "url": "https://images.unsplash.com/photo-1567943183748-3a7542120c90?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NTYxODd8MHwxfHNlYXJjaHwxfHxjb21wYW55JTIwbG9nbyUyMGFic3RyYWN0JTIwYXJjaGl0ZWN0dXJlfGVufDB8fHx8MTc4MDg5NDk5MHww&ixlib=rb-4.1.0&q=85",
+      "description": "Abstract architecture logo substitute for Gyarahalli Thammayya Groups."
+    },
+    "user_avatars": [
+      "https://images.unsplash.com/photo-1494790108377-be9c29b29330?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NTY2NjZ8MHwxfHNlYXJjaHwzfHxwcm9mZXNzaW9uYWwlMjBoZWFkc2hvdCUyMHBvcnRyYWl0fGVufDB8fHx8MTc4MDg5NDk4NXww&ixlib=rb-4.1.0&q=85",
+      "https://images.unsplash.com/photo-1500648767791-00dcc994a43e?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NTY2NjZ8MHwxfHNlYXJjaHwxfHxwcm9mZXNzaW9uYWwlMjBoZWFkc2hvdCUyMHBvcnRyYWl0fGVufDB8fHx8MTc4MDg5NDk4NXww&ixlib=rb-4.1.0&q=85",
+      "https://images.unsplash.com/photo-1607503873903-c5e95f80d7b9?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NTY2NjZ8MHwxfHNlYXJjaHw0fHxwcm9mZXNzaW9uYWwlMjBoZWFkc2hvdCUyMHBvcnRyYWl0fGVufDB8fHx8MTc4MDg5NDk4NXww&ixlib=rb-4.1.0&q=85"
+    ]
+  },
+  "testing": {
+    "attributes": "All interactive and key informational elements MUST include a data-testid attribute in kebab-case format."
+  },
+  "instructions_to_main_agent": [
+    "Strictly adhere to the Swiss & High-Contrast archetype. Never use soft pastel gradients.",
+    "Implement Shadcn UI for the dashboard and heavily customize tables/cards to remove default styling and apply the Grid Borders look.",
+    "For the Leaflet map, apply a monochromatic or light-themed tile layer (like CartoDB Positron) so the colorful route lines and pins pop out clearly.",
+    "Ensure the PWA UI is extremely thumb-friendly (large target areas, minimum 48px height for touch interactions).",
+    "Use data-testid for all check-in/out toggles, map markers, and admin filters."
+  ]
+}
