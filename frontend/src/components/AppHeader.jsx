@@ -12,7 +12,11 @@ export default function AppHeader() {
     <header className="bg-card border-b border-border sticky top-0 z-30">
       <div className="px-4 sm:px-6 h-16 flex items-center justify-between">
         <Link to={isAdmin ? "/admin" : "/dashboard"} className="flex items-center gap-3" data-testid="brand-link">
-          <div className="w-8 h-8 bg-foreground text-background grid place-items-center font-bold font-mono text-xs">GT</div>
+          <img
+            src="https://customer-assets.emergentagent.com/job_employee-locator-4/artifacts/zipc3k6u_gtg%20logo.png"
+            alt="Gyarahalli Thammayya Groups"
+            className="w-10 h-10 object-contain bg-black p-1 rounded-sm border border-border"
+          />
           <div className="hidden sm:flex flex-col leading-tight">
             <span className="text-[10px] label-overline">Gyarahalli Thammayya</span>
             <span className="text-sm font-semibold tracking-tight">Attendance &amp; Field Work</span>
