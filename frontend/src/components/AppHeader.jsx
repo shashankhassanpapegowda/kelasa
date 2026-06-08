@@ -13,7 +13,7 @@ export default function AppHeader() {
       <div className="px-4 sm:px-6 h-16 flex items-center justify-between">
         <Link to={isAdmin ? "/admin" : "/dashboard"} className="flex items-center gap-3" data-testid="brand-link">
           <img
-            src="https://customer-assets.emergentagent.com/job_employee-locator-4/artifacts/zipc3k6u_gtg%20logo.png"
+            src="https://customer-assets.emergentagent.com/job_employee-locator-4/artifacts/5n0qsrf7_GTG%20LOGO%20BLACK.png"
             alt="Gyarahalli Thammayya Groups"
             className="w-10 h-10 object-contain bg-black p-1 rounded-sm border border-border"
           />

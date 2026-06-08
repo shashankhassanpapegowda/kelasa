@@ -13,7 +13,7 @@ export default function Login() {
       <div className="flex flex-col justify-between p-8 lg:p-14 bg-card border-r border-border">
         <div className="flex items-center gap-3">
           <img
-            src="https://customer-assets.emergentagent.com/job_employee-locator-4/artifacts/zipc3k6u_gtg%20logo.png"
+            src="https://customer-assets.emergentagent.com/job_employee-locator-4/artifacts/5n0qsrf7_GTG%20LOGO%20BLACK.png"
             alt="Gyarahalli Thammayya Groups"
             className="w-14 h-14 object-contain bg-black p-1.5 rounded-sm"
           />
