@@ -15,7 +15,7 @@ export default function Login() {
           <img
             src="https://customer-assets.emergentagent.com/job_employee-locator-4/artifacts/5n0qsrf7_GTG%20LOGO%20BLACK.png"
             alt="Gyarahalli Thammayya Groups"
-            className="w-14 h-14 object-contain bg-black p-1.5 rounded-sm"
+            className="brand-logo w-14 h-14 object-contain"
           />
           <div className="flex flex-col leading-tight">
             <span className="text-xs label-overline">Powered by</span>

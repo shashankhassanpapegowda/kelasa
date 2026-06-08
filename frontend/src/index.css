@@ -124,6 +124,17 @@
     color: white;
 }
 
+/* Brand logo: "knock out" the black background of the PNG so it blends seamlessly with any light surface */
+.brand-logo {
+    mix-blend-mode: multiply;
+    filter: contrast(1.05);
+}
+.on-dark .brand-logo,
+.brand-logo.on-dark {
+    mix-blend-mode: screen;
+    filter: invert(1) contrast(1.05);
+}
+
 /* Topographic background pattern */
 .topo-bg {
     background-color: #0d0d12;

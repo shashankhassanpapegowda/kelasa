@@ -15,7 +15,7 @@ export default function AppHeader() {
           <img
             src="https://customer-assets.emergentagent.com/job_employee-locator-4/artifacts/5n0qsrf7_GTG%20LOGO%20BLACK.png"
             alt="Gyarahalli Thammayya Groups"
-            className="w-10 h-10 object-contain bg-black p-1 rounded-sm border border-border"
+            className="brand-logo w-10 h-10 object-contain"
           />
           <div className="hidden sm:flex flex-col leading-tight">
             <span className="text-[10px] label-overline">Gyarahalli Thammayya</span>
