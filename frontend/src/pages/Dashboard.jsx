@@ -1,11 +1,16 @@
 import { useEffect, useRef, useState } from "react";
 import AppHeader from "@/components/AppHeader";
 import MapView from "@/components/MapView";
+import FaceCapture from "@/components/FaceCapture";
+import AuthPhoto from "@/components/AuthPhoto";
 import { api } from "@/lib/api";
 import { toast } from "sonner";
-import { Play, Stop, Clock, Path, MapPin, ArrowsClockwise } from "@phosphor-icons/react";
+import { useAuth } from "@/lib/auth";
+import { useNavigate } from "react-router-dom";
+import { getAccuratePosition } from "@/lib/geo";
+import { Play, Stop, Clock, Path as PathIcon, MapPin, ArrowsClockwise, Camera, GpsFix, WarningCircle } from "@phosphor-icons/react";
 
-const PING_INTERVAL_MS = 60_000; // 1 minute
+const PING_INTERVAL_MS = 60_000;
 
 const fmtTime = (iso) => iso ? new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : "—";
 const fmtDate = (iso) => iso ? new Date(iso).toLocaleDateString([], { day: '2-digit', month: 'short' }) : "—";
@@ -14,27 +19,29 @@ const fmtDuration = (mins) => {
   const h = Math.floor(mins / 60); const m = mins % 60;
   return `${h}h ${m}m`;
 };
-
-function getGeo() {
-  return new Promise((resolve, reject) => {
-    if (!navigator.geolocation) return reject(new Error("Geolocation not available"));
-    navigator.geolocation.getCurrentPosition(
-      (pos) => resolve({ lat: pos.coords.latitude, lng: pos.coords.longitude, accuracy: pos.coords.accuracy }),
-      (err) => reject(err),
-      { enableHighAccuracy: true, timeout: 12000, maximumAge: 0 }
-    );
-  });
-}
+const fmtAccuracy = (m) => m == null ? "—" : m < 1000 ? `±${Math.round(m)}m` : `±${(m/1000).toFixed(1)}km`;
 
 export default function Dashboard() {
+  const { user } = useAuth();
+  const navigate = useNavigate();
   const [active, setActive] = useState(null);
   const [todayRecords, setTodayRecords] = useState([]);
   const [pings, setPings] = useState([]);
   const [history, setHistory] = useState([]);
   const [busy, setBusy] = useState(false);
   const [elapsed, setElapsed] = useState("00:00:00");
+  const [faceOpen, setFaceOpen] = useState(false);
+  const [faceMode, setFaceMode] = useState("in"); // "in" | "out"
+  const [pendingGeo, setPendingGeo] = useState(null);
+  const [geoStatus, setGeoStatus] = useState({ accuracy: null, fetching: false });
   const pingTimer = useRef(null);
   const tickTimer = useRef(null);
+
+  useEffect(() => {
+    if (user && !user.face_enrolled) {
+      navigate("/enroll", { replace: true });
+    }
+  }, [user, navigate]);
 
   const refresh = async () => {
     const [t, l, h] = await Promise.all([
@@ -50,12 +57,10 @@ export default function Dashboard() {
 
   useEffect(() => { refresh(); }, []);
 
-  // schedule pings while on duty
   useEffect(() => {
     if (pingTimer.current) { clearInterval(pingTimer.current); pingTimer.current = null; }
     if (tickTimer.current) { clearInterval(tickTimer.current); tickTimer.current = null; }
     if (!active) { setElapsed("00:00:00"); return; }
-
     const tick = () => {
       const start = new Date(active.check_in).getTime();
       const diff = Math.max(0, Math.floor((Date.now() - start) / 1000));
@@ -69,7 +74,7 @@ export default function Dashboard() {
 
     const sendPing = async () => {
       try {
-        const g = await getGeo();
+        const g = await getAccuratePosition({ desiredAccuracy: 50, maxWait: 10000 });
         await api.post("/location/ping", g);
         const l = await api.get("/location/today");
         setPings(l.data.pings || []);
@@ -84,28 +89,49 @@ export default function Dashboard() {
     };
   }, [active?.record_id]);
 
-  const handleCheckIn = async () => {
+  const startCheck = async (mode) => {
     setBusy(true);
+    setGeoStatus({ accuracy: null, fetching: true });
     try {
-      const g = await getGeo();
-      await api.post("/attendance/checkin", { lat: g.lat, lng: g.lng });
-      toast.success("Checked in. Tracking started.");
-      await refresh();
+      const g = await getAccuratePosition({ desiredAccuracy: 30, fallbackAccuracy: 150, maxWait: 15000 });
+      setGeoStatus({ accuracy: g.accuracy, fetching: false });
+      if (g.accuracy > 200) {
+        toast.warning(`Low location accuracy (±${Math.round(g.accuracy)}m). Move outside / enable Precise Location for best results.`);
+      }
+      setPendingGeo(g);
+      setFaceMode(mode);
+      setFaceOpen(true);
     } catch (e) {
-      toast.error(e?.response?.data?.detail || e.message || "Check-in failed");
-    } finally { setBusy(false); }
+      setGeoStatus({ accuracy: null, fetching: false });
+      toast.error(e?.message || "Could not get your location. Enable Precise Location.");
+    } finally {
+      setBusy(false);
+    }
   };
 
-  const handleCheckOut = async () => {
-    setBusy(true);
+  const handleFaceCapture = async ({ descriptor, image_b64 }) => {
+    const payload = {
+      lat: pendingGeo.lat,
+      lng: pendingGeo.lng,
+      accuracy: pendingGeo.accuracy,
+      descriptor,
+      image_b64,
+    };
     try {
-      const g = await getGeo();
-      await api.post("/attendance/checkout", { lat: g.lat, lng: g.lng });
-      toast.success("Checked out. Session saved.");
+      if (faceMode === "in") {
+        await api.post("/attendance/checkin", payload);
+        toast.success("Checked in. Tracking started.");
+      } else {
+        await api.post("/attendance/checkout", payload);
+        toast.success("Checked out. Session saved.");
+      }
+      setFaceOpen(false);
+      setPendingGeo(null);
       await refresh();
     } catch (e) {
-      toast.error(e?.response?.data?.detail || e.message || "Check-out failed");
-    } finally { setBusy(false); }
+      toast.error(e?.response?.data?.detail || "Failed");
+      throw e;
+    }
   };
 
   const todayMinutes = todayRecords.reduce((acc, r) => acc + (r.duration_minutes || 0), 0);
@@ -129,11 +155,14 @@ export default function Dashboard() {
           <div className="mt-6 grid lg:grid-cols-3 gap-0 border border-border bg-card">
             <div className="lg:col-span-2 p-6 sm:p-8 border-b lg:border-b-0 lg:border-r border-border">
               <div className="flex items-center gap-3">
-                <span
-                  className={`inline-block w-2.5 h-2.5 rounded-full ${active ? "bg-[#00E676]" : "bg-[#52525B]"}`}
-                  data-testid="duty-indicator"
-                />
+                <span className={`inline-block w-2.5 h-2.5 rounded-full ${active ? "bg-[#00E676]" : "bg-[#52525B]"}`} data-testid="duty-indicator"/>
                 <span className="label-overline" data-testid="duty-status">{active ? "ON DUTY" : "OFF DUTY"}</span>
+                {geoStatus.fetching && <span className="text-[10px] font-mono text-muted-foreground ml-2 inline-flex items-center gap-1"><GpsFix size={12} className="animate-pulse"/> getting GPS…</span>}
+                {geoStatus.accuracy != null && (
+                  <span className={`text-[10px] font-mono ml-2 inline-flex items-center gap-1 ${geoStatus.accuracy > 200 ? "text-[#FF3B30]" : geoStatus.accuracy > 100 ? "text-yellow-600" : "text-[#00E676]"}`}>
+                    <GpsFix size={12}/> {fmtAccuracy(geoStatus.accuracy)}
+                  </span>
+                )}
               </div>
               <div className="mt-6 flex items-end gap-6 flex-wrap">
                 <div>
@@ -149,27 +178,23 @@ export default function Dashboard() {
               </div>
               <div className="mt-8">
                 {!active ? (
-                  <button
-                    onClick={handleCheckIn}
-                    disabled={busy}
-                    data-testid="check-in-btn"
-                    className="bg-foreground text-background px-6 py-4 inline-flex items-center gap-3 hover:bg-primary disabled:opacity-50 transition-colors"
-                  >
-                    <Play size={18} weight="fill"/>
-                    <span className="font-medium">Check In · Start Tracking</span>
+                  <button onClick={() => startCheck("in")} disabled={busy} data-testid="check-in-btn"
+                    className="bg-foreground text-background px-6 py-4 inline-flex items-center gap-3 hover:bg-primary disabled:opacity-50 transition-colors">
+                    <Camera size={18} weight="bold"/>
+                    <span className="font-medium">Face Check-In · Start Tracking</span>
                   </button>
                 ) : (
-                  <button
-                    onClick={handleCheckOut}
-                    disabled={busy}
-                    data-testid="check-out-btn"
-                    className="bg-[#FF3B30] text-white px-6 py-4 inline-flex items-center gap-3 hover:bg-[#d93128] disabled:opacity-50 transition-colors"
-                  >
-                    <Stop size={18} weight="fill"/>
-                    <span className="font-medium">Check Out · End Session</span>
+                  <button onClick={() => startCheck("out")} disabled={busy} data-testid="check-out-btn"
+                    className="bg-[#FF3B30] text-white px-6 py-4 inline-flex items-center gap-3 hover:bg-[#d93128] disabled:opacity-50 transition-colors">
+                    <Camera size={18} weight="bold"/>
+                    <span className="font-medium">Face Check-Out · End Session</span>
                   </button>
                 )}
                 {busy && <div className="loading-bar mt-4"/>}
+                <p className="mt-3 text-xs text-muted-foreground flex items-start gap-1.5 max-w-md">
+                  <WarningCircle size={14} weight="bold" className="mt-0.5 shrink-0"/>
+                  Allow camera + <strong>Precise Location</strong>. Coarse / WiFi-based location can be off by 10+ km.
+                </p>
               </div>
             </div>
 
@@ -185,7 +210,7 @@ export default function Dashboard() {
             <div className="lg:col-span-2 border-b lg:border-b-0 lg:border-r border-border">
               <div className="p-4 flex items-center justify-between border-b border-border">
                 <div className="flex items-center gap-2">
-                  <Path size={16} weight="bold" className="text-primary"/>
+                  <PathIcon size={16} weight="bold" className="text-primary"/>
                   <span className="label-overline">Today's Route</span>
                 </div>
                 <span className="font-mono text-xs text-muted-foreground">{pings.length} POINTS</span>
@@ -212,8 +237,13 @@ export default function Dashboard() {
               <div className="divide-y divide-border max-h-[420px] overflow-y-auto" data-testid="history-list">
                 {history.length === 0 && <div className="p-6 text-sm text-muted-foreground">No history yet.</div>}
                 {history.map(r => (
-                  <div key={r.record_id} className="p-4 flex items-center justify-between">
-                    <div>
+                  <div key={r.record_id} className="p-4 flex items-center gap-3">
+                    <AuthPhoto
+                      path={r.check_in_photo_path}
+                      className="w-12 h-12 object-cover border border-border"
+                      fallback={<div className="w-12 h-12 bg-secondary border border-border"/>}
+                    />
+                    <div className="flex-1 min-w-0">
                       <div className="text-sm font-medium">{fmtDate(r.check_in)}</div>
                       <div className="font-mono text-xs text-muted-foreground mt-0.5">
                         {fmtTime(r.check_in)} → {r.check_out ? fmtTime(r.check_out) : "active"}
@@ -230,6 +260,15 @@ export default function Dashboard() {
           </div>
         </div>
       </main>
+
+      <FaceCapture
+        open={faceOpen}
+        title={faceMode === "in" ? "Face Check-In" : "Face Check-Out"}
+        subtitle={faceMode === "in" ? "Verify your identity to start your duty session." : "Verify your identity to end your duty session."}
+        cta={faceMode === "in" ? "Check In" : "Check Out"}
+        onClose={() => { setFaceOpen(false); setPendingGeo(null); }}
+        onCapture={handleFaceCapture}
+      />
     </div>
   );
 }

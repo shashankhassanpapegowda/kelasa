@@ -6,8 +6,9 @@ import Login from "@/pages/Login";
 import AuthCallback from "@/pages/AuthCallback";
 import Dashboard from "@/pages/Dashboard";
 import AdminPanel from "@/pages/AdminPanel";
+import FaceEnroll from "@/pages/FaceEnroll";
 
-function ProtectedRoute({ children, adminOnly = false }) {
+function ProtectedRoute({ children, adminOnly = false, skipFaceCheck = false }) {
   const { user, loading } = useAuth();
   if (loading) {
     return (
@@ -20,6 +21,7 @@ function ProtectedRoute({ children, adminOnly = false }) {
     );
   }
   if (!user) return <Navigate to="/" replace/>;
+  if (!skipFaceCheck && !user.face_enrolled) return <Navigate to="/enroll" replace/>;
   if (adminOnly && user.role !== "admin") return <Navigate to="/dashboard" replace/>;
   return children;
 }
@@ -27,18 +29,20 @@ function ProtectedRoute({ children, adminOnly = false }) {
 function RootRedirect() {
   const { user, loading } = useAuth();
   if (loading) return null;
-  if (user) return <Navigate to={user.role === "admin" ? "/admin" : "/dashboard"} replace/>;
+  if (user) {
+    if (!user.face_enrolled) return <Navigate to="/enroll" replace/>;
+    return <Navigate to={user.role === "admin" ? "/admin" : "/dashboard"} replace/>;
+  }
   return <Login/>;
 }
 
 function AppRouter() {
   const location = useLocation();
-  if (location.hash?.includes("session_id=")) {
-    return <AuthCallback/>;
-  }
+  if (location.hash?.includes("session_id=")) return <AuthCallback/>;
   return (
     <Routes>
       <Route path="/" element={<RootRedirect/>}/>
+      <Route path="/enroll" element={<ProtectedRoute skipFaceCheck><FaceEnroll/></ProtectedRoute>}/>
       <Route path="/dashboard" element={<ProtectedRoute><Dashboard/></ProtectedRoute>}/>
       <Route path="/admin" element={<ProtectedRoute adminOnly><AdminPanel/></ProtectedRoute>}/>
       <Route path="*" element={<Navigate to="/" replace/>}/>

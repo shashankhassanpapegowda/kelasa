@@ -1,9 +1,10 @@
 import { useEffect, useState } from "react";
 import AppHeader from "@/components/AppHeader";
 import MapView from "@/components/MapView";
+import AuthPhoto from "@/components/AuthPhoto";
 import { api } from "@/lib/api";
 import { toast } from "sonner";
-import { Users, Pulse, Clock, CheckSquare, ArrowsClockwise, Path } from "@phosphor-icons/react";
+import { Users, Pulse, Clock, CheckSquare, ArrowsClockwise, Path as PathIcon, X, ArrowSquareOut, GpsFix } from "@phosphor-icons/react";
 
 const fmtTime = (iso) => iso ? new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : "—";
 const fmtDuration = (mins) => {
@@ -11,6 +12,8 @@ const fmtDuration = (mins) => {
   const h = Math.floor(mins / 60); const m = mins % 60;
   return `${h}h ${m}m`;
 };
+const fmtAcc = (m) => m == null ? "" : m < 1000 ? `±${Math.round(m)}m` : `±${(m/1000).toFixed(1)}km`;
+const accClass = (m) => m == null ? "text-muted-foreground" : m > 200 ? "text-[#FF3B30]" : m > 100 ? "text-yellow-600" : "text-[#00E676]";
 
 export default function AdminPanel() {
   const [stats, setStats] = useState(null);
@@ -20,6 +23,7 @@ export default function AdminPanel() {
   const [selectedEmp, setSelectedEmp] = useState(null);
   const [empRoute, setEmpRoute] = useState({ pings: [], attendance: [], employee: null });
   const [loading, setLoading] = useState(false);
+  const [photoModal, setPhotoModal] = useState(null); // {path, label, meta}
 
   const refresh = async () => {
     setLoading(true);
@@ -32,7 +36,7 @@ export default function AdminPanel() {
       setStats(s.data);
       setEmployees(e.data.employees || []);
       setAttendance(a.data.records || []);
-    } catch (err) {
+    } catch {
       toast.error("Failed to load admin data");
     } finally { setLoading(false); }
   };
@@ -44,9 +48,7 @@ export default function AdminPanel() {
     try {
       const res = await api.get(`/admin/employees/${emp.user_id}/route?date=${date}`);
       setEmpRoute(res.data);
-    } catch {
-      setEmpRoute({ pings: [], attendance: [], employee: emp });
-    }
+    } catch { setEmpRoute({ pings: [], attendance: [], employee: emp }); }
   };
 
   const toggleRole = async (emp) => {
@@ -55,9 +57,16 @@ export default function AdminPanel() {
       await api.patch(`/admin/employees/${emp.user_id}/role`, { role: newRole });
       toast.success(`${emp.name} → ${newRole}`);
       refresh();
-    } catch (e) {
-      toast.error(e?.response?.data?.detail || "Update failed");
-    }
+    } catch (e) { toast.error(e?.response?.data?.detail || "Update failed"); }
+  };
+
+  const resetFace = async (emp) => {
+    if (!confirm(`Reset face enrollment for ${emp.name}? They'll need to re-enrol.`)) return;
+    try {
+      await api.delete(`/admin/employees/${emp.user_id}/face`);
+      toast.success("Face enrollment reset");
+      refresh();
+    } catch { toast.error("Reset failed"); }
   };
 
   return (
@@ -71,20 +80,14 @@ export default function AdminPanel() {
               <h1 className="text-3xl sm:text-4xl font-semibold tracking-tight mt-1">Master Panel</h1>
             </div>
             <div className="flex items-center gap-3">
-              <input
-                type="date"
-                value={date}
-                onChange={e => setDate(e.target.value)}
-                data-testid="date-filter"
-                className="bg-card border border-border px-3 py-2 text-sm font-mono"
-              />
+              <input type="date" value={date} onChange={e => setDate(e.target.value)} data-testid="date-filter"
+                className="bg-card border border-border px-3 py-2 text-sm font-mono"/>
               <button onClick={refresh} className="text-xs label-overline flex items-center gap-2 hover:text-foreground" data-testid="admin-refresh">
                 <ArrowsClockwise size={14} weight="bold"/> Refresh
               </button>
             </div>
           </div>
 
-          {/* Stats */}
           <div className="mt-6 grid grid-cols-2 lg:grid-cols-4 gap-0 border border-border bg-card">
             <StatBlock label="Employees" value={stats?.total_employees ?? "—"} icon={<Users size={18} weight="bold"/>} testid="stat-employees"/>
             <StatBlock label="On Duty Now" value={stats?.on_duty ?? "—"} icon={<Pulse size={18} weight="bold"/>} accent testid="stat-on-duty"/>
@@ -93,38 +96,41 @@ export default function AdminPanel() {
           </div>
           {loading && <div className="loading-bar mt-2"/>}
 
-          {/* Employees & Attendance */}
           <div className="mt-6 grid lg:grid-cols-2 gap-0 border border-border bg-card">
-            {/* Employees */}
             <div className="lg:border-r border-border border-b lg:border-b-0">
               <div className="p-4 flex items-center justify-between border-b border-border">
                 <span className="label-overline">Employees</span>
                 <span className="font-mono text-xs text-muted-foreground">{employees.length} TOTAL</span>
               </div>
-              <div className="divide-y divide-border max-h-[420px] overflow-y-auto" data-testid="employees-list">
+              <div className="divide-y divide-border max-h-[460px] overflow-y-auto" data-testid="employees-list">
                 {employees.map(emp => (
                   <div key={emp.user_id} className="p-4 flex items-center gap-3 hover:bg-secondary/40 cursor-pointer" onClick={() => openEmp(emp)} data-testid={`emp-row-${emp.user_id}`}>
-                    {emp.picture
-                      ? <img src={emp.picture} className="w-10 h-10 rounded-full border border-border" alt=""/>
-                      : <div className="w-10 h-10 rounded-full bg-secondary grid place-items-center text-sm font-medium">{emp.name?.[0]}</div>
-                    }
+                    <AuthPhoto path={emp.face_photo_path} className="w-10 h-10 rounded-full object-cover border border-border"
+                      fallback={emp.picture
+                        ? <img src={emp.picture} className="w-10 h-10 rounded-full border border-border" alt=""/>
+                        : <div className="w-10 h-10 rounded-full bg-secondary grid place-items-center text-sm font-medium">{emp.name?.[0]}</div>
+                      }/>
                     <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2">
+                      <div className="flex items-center gap-2 flex-wrap">
                         <span className="text-sm font-medium truncate">{emp.name}</span>
                         {emp.is_on_duty && <span className="text-[10px] font-mono uppercase tracking-wider bg-[#00E676] text-black px-1.5 py-0.5">ON DUTY</span>}
                         {emp.role === "admin" && <span className="text-[10px] font-mono uppercase tracking-wider border border-border px-1.5 py-0.5">ADMIN</span>}
+                        {!emp.face_enrolled && <span className="text-[10px] font-mono uppercase tracking-wider bg-yellow-500/20 text-yellow-700 px-1.5 py-0.5">NOT ENROLLED</span>}
                       </div>
                       <div className="text-xs text-muted-foreground truncate">{emp.email}</div>
                     </div>
-                    <div className="text-right">
+                    <div className="text-right shrink-0">
                       <div className="font-mono text-sm">{fmtDuration(emp.today_minutes)}</div>
-                      <button
-                        onClick={(e) => { e.stopPropagation(); toggleRole(emp); }}
-                        className="text-[10px] label-overline hover:text-primary"
-                        data-testid={`toggle-role-${emp.user_id}`}
-                      >
-                        Make {emp.role === "admin" ? "Employee" : "Admin"}
-                      </button>
+                      <div className="flex items-center gap-2 mt-0.5 justify-end">
+                        <button onClick={(e) => { e.stopPropagation(); toggleRole(emp); }} className="text-[10px] label-overline hover:text-primary" data-testid={`toggle-role-${emp.user_id}`}>
+                          {emp.role === "admin" ? "→ EMP" : "→ ADMIN"}
+                        </button>
+                        {emp.face_enrolled && (
+                          <button onClick={(e) => { e.stopPropagation(); resetFace(emp); }} className="text-[10px] label-overline hover:text-[#FF3B30]" data-testid={`reset-face-${emp.user_id}`}>
+                            RESET FACE
+                          </button>
+                        )}
+                      </div>
                     </div>
                   </div>
                 ))}
@@ -132,19 +138,19 @@ export default function AdminPanel() {
               </div>
             </div>
 
-            {/* Today's attendance */}
             <div>
               <div className="p-4 flex items-center justify-between border-b border-border">
                 <span className="label-overline">Attendance Log · {date}</span>
                 <span className="font-mono text-xs text-muted-foreground">{attendance.length} SESSIONS</span>
               </div>
-              <div className="max-h-[420px] overflow-y-auto" data-testid="attendance-log">
+              <div className="max-h-[460px] overflow-y-auto" data-testid="attendance-log">
                 <table className="w-full text-sm">
                   <thead className="text-[10px] label-overline">
                     <tr className="border-b border-border">
                       <th className="text-left p-3">Employee</th>
                       <th className="text-left p-3">In</th>
                       <th className="text-left p-3">Out</th>
+                      <th className="text-left p-3">Photos</th>
                       <th className="text-right p-3">Duration</th>
                     </tr>
                   </thead>
@@ -155,13 +161,38 @@ export default function AdminPanel() {
                           <div className="font-medium">{r.name || r.user_id}</div>
                           <div className="text-xs text-muted-foreground">{r.email}</div>
                         </td>
-                        <td className="p-3 font-mono">{fmtTime(r.check_in)}</td>
-                        <td className="p-3 font-mono">{r.check_out ? fmtTime(r.check_out) : <span className="text-[#00E676]">live</span>}</td>
+                        <td className="p-3 font-mono">
+                          {fmtTime(r.check_in)}
+                          {r.check_in_accuracy != null && <div className={`text-[10px] ${accClass(r.check_in_accuracy)}`}>{fmtAcc(r.check_in_accuracy)}</div>}
+                        </td>
+                        <td className="p-3 font-mono">
+                          {r.check_out ? fmtTime(r.check_out) : <span className="text-[#00E676]">live</span>}
+                          {r.check_out_accuracy != null && <div className={`text-[10px] ${accClass(r.check_out_accuracy)}`}>{fmtAcc(r.check_out_accuracy)}</div>}
+                        </td>
+                        <td className="p-3">
+                          <div className="flex items-center gap-1.5">
+                            {r.check_in_photo_path && (
+                              <button onClick={() => setPhotoModal({ path: r.check_in_photo_path, label: "Check-In", record: r, kind: "in" })}
+                                className="border border-border hover:border-primary" data-testid={`photo-in-${r.record_id}`}>
+                                <AuthPhoto path={r.check_in_photo_path} className="w-9 h-9 object-cover"
+                                  fallback={<div className="w-9 h-9 bg-secondary"/>}/>
+                              </button>
+                            )}
+                            {r.check_out_photo_path && (
+                              <button onClick={() => setPhotoModal({ path: r.check_out_photo_path, label: "Check-Out", record: r, kind: "out" })}
+                                className="border border-border hover:border-primary" data-testid={`photo-out-${r.record_id}`}>
+                                <AuthPhoto path={r.check_out_photo_path} className="w-9 h-9 object-cover"
+                                  fallback={<div className="w-9 h-9 bg-secondary"/>}/>
+                              </button>
+                            )}
+                            {!r.check_in_photo_path && !r.check_out_photo_path && <span className="text-xs text-muted-foreground">—</span>}
+                          </div>
+                        </td>
                         <td className="p-3 font-mono text-right">{fmtDuration(r.duration_minutes)}</td>
                       </tr>
                     ))}
                     {attendance.length === 0 && (
-                      <tr><td colSpan={4} className="p-6 text-center text-muted-foreground">No sessions on this date.</td></tr>
+                      <tr><td colSpan={5} className="p-6 text-center text-muted-foreground">No sessions on this date.</td></tr>
                     )}
                   </tbody>
                 </table>
@@ -169,11 +200,10 @@ export default function AdminPanel() {
             </div>
           </div>
 
-          {/* Selected employee route */}
           <div className="mt-6 border border-border bg-card">
             <div className="p-4 flex items-center justify-between border-b border-border">
               <div className="flex items-center gap-2">
-                <Path size={16} weight="bold" className="text-primary"/>
+                <PathIcon size={16} weight="bold" className="text-primary"/>
                 <span className="label-overline">Route Inspector</span>
                 {selectedEmp && <span className="text-sm font-medium ml-2" data-testid="selected-emp">{selectedEmp.name}</span>}
               </div>
@@ -192,30 +222,88 @@ export default function AdminPanel() {
                 ) : <MapView pings={empRoute.pings}/>}
               </div>
               <div className="max-h-[460px] overflow-y-auto" data-testid="timeline">
-                <div className="p-4 border-b border-border">
-                  <span className="label-overline">Timeline</span>
-                </div>
+                <div className="p-4 border-b border-border"><span className="label-overline">Timeline</span></div>
                 <div className="divide-y divide-border">
                   {(empRoute.attendance || []).map(r => (
                     <div key={r.record_id} className="p-4">
+                      <div className="flex items-center gap-2 mb-2">
+                        {r.check_in_photo_path && (
+                          <button onClick={() => setPhotoModal({ path: r.check_in_photo_path, label: "Check-In", record: r, kind: "in" })}>
+                            <AuthPhoto path={r.check_in_photo_path} className="w-10 h-10 object-cover border border-border"
+                              fallback={<div className="w-10 h-10 bg-secondary"/>}/>
+                          </button>
+                        )}
+                        {r.check_out_photo_path && (
+                          <button onClick={() => setPhotoModal({ path: r.check_out_photo_path, label: "Check-Out", record: r, kind: "out" })}>
+                            <AuthPhoto path={r.check_out_photo_path} className="w-10 h-10 object-cover border border-border"
+                              fallback={<div className="w-10 h-10 bg-secondary"/>}/>
+                          </button>
+                        )}
+                      </div>
                       <div className="text-xs label-overline mb-1">Session</div>
                       <div className="font-mono text-sm">{fmtTime(r.check_in)} → {r.check_out ? fmtTime(r.check_out) : "live"}</div>
                       <div className="text-xs text-muted-foreground mt-1">{fmtDuration(r.duration_minutes)}</div>
                     </div>
                   ))}
-                  {(empRoute.pings || []).slice(0, 50).map((p, i) => (
+                  {(empRoute.pings || []).slice(0, 50).map((p) => (
                     <div key={p.ping_id} className="p-3 flex items-center justify-between">
-                      <div className="font-mono text-xs">{fmtTime(p.timestamp)}</div>
-                      <div className="font-mono text-[10px] text-muted-foreground">{p.lat.toFixed(4)}, {p.lng.toFixed(4)}</div>
+                      <div>
+                        <div className="font-mono text-xs">{fmtTime(p.timestamp)}</div>
+                        <div className={`font-mono text-[10px] ${accClass(p.accuracy)}`}><GpsFix size={10} className="inline mr-0.5"/>{fmtAcc(p.accuracy)}</div>
+                      </div>
+                      <div className="font-mono text-[10px] text-muted-foreground">{p.lat.toFixed(5)}, {p.lng.toFixed(5)}</div>
                     </div>
                   ))}
-                  {!selectedEmp && <div className="p-6 text-xs text-muted-foreground">No selection.</div>}
                 </div>
               </div>
             </div>
           </div>
         </div>
       </main>
+
+      {photoModal && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm grid place-items-center p-4" onClick={() => setPhotoModal(null)} data-testid="photo-modal">
+          <div className="bg-card border border-border max-w-lg w-full" onClick={(e) => e.stopPropagation()}>
+            <div className="p-4 border-b border-border flex items-center justify-between">
+              <div>
+                <div className="label-overline">{photoModal.label} Photo</div>
+                <div className="font-semibold tracking-tight mt-0.5">{photoModal.record.name}</div>
+              </div>
+              <button onClick={() => setPhotoModal(null)} className="p-1 hover:bg-secondary"><X size={18} weight="bold"/></button>
+            </div>
+            <AuthPhoto path={photoModal.path} className="w-full aspect-[4/3] object-cover bg-black"
+              fallback={<div className="w-full aspect-[4/3] bg-secondary"/>}/>
+            <div className="p-4 grid grid-cols-2 gap-3 text-sm">
+              <div>
+                <div className="label-overline mb-1">Timestamp</div>
+                <div className="font-mono">{photoModal.kind === "in" ? fmtTime(photoModal.record.check_in) : fmtTime(photoModal.record.check_out)}</div>
+              </div>
+              <div>
+                <div className="label-overline mb-1">Face Match</div>
+                <div className="font-mono">{photoModal.kind === "in" ? photoModal.record.check_in_face_distance : photoModal.record.check_out_face_distance ?? "—"}</div>
+              </div>
+              <div>
+                <div className="label-overline mb-1">Location</div>
+                <div className="font-mono text-xs">
+                  {photoModal.kind === "in"
+                    ? `${photoModal.record.check_in_lat?.toFixed(5)}, ${photoModal.record.check_in_lng?.toFixed(5)}`
+                    : `${photoModal.record.check_out_lat?.toFixed(5)}, ${photoModal.record.check_out_lng?.toFixed(5)}`}
+                </div>
+                <a href={`https://www.openstreetmap.org/?mlat=${photoModal.kind === "in" ? photoModal.record.check_in_lat : photoModal.record.check_out_lat}&mlon=${photoModal.kind === "in" ? photoModal.record.check_in_lng : photoModal.record.check_out_lng}#map=18`}
+                   target="_blank" rel="noreferrer" className="text-[10px] label-overline text-primary hover:underline inline-flex items-center gap-1 mt-1">
+                  <ArrowSquareOut size={10}/> Open in map
+                </a>
+              </div>
+              <div>
+                <div className="label-overline mb-1">GPS Accuracy</div>
+                <div className={`font-mono text-xs ${accClass(photoModal.kind === "in" ? photoModal.record.check_in_accuracy : photoModal.record.check_out_accuracy)}`}>
+                  {fmtAcc(photoModal.kind === "in" ? photoModal.record.check_in_accuracy : photoModal.record.check_out_accuracy)}
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

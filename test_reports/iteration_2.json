@@ -1,0 +1,44 @@
+{
+  "summary": "Iteration 2 - face recognition attendance + location accuracy improvements tested. Backend: 18/18 pytest tests pass covering smoke, RBAC, face enroll (invalid descriptor 400, success + status flip + DB persistence + descriptor never leaked), file serving (401 anon / 200 authed), attendance check-in without enrollment (400), full flow check-in+ping+checkout with descriptor+image_b64, low-accuracy (>500m) ping skipped (no DB write), good-accuracy ping stored, mismatched descriptor rejected (403), admin /attendance includes check_in_photo_path + check_out_photo_path + accuracy fields, admin /route includes accuracy & photo paths, admin DELETE /face resets enrollment. Frontend: 7/7 critical flows pass - unauthenticated login-google-button visible, unenrolled user redirected to /enroll, enrollment page renders with start-enrollment-btn + 'Enroll your face' heading, enrolled admin lands directly on /admin (no enroll redirect), Photos column header present in attendance log, accuracy values (e.g. ±12m) displayed under In/Out times, photo modal opens when clicking photo button (verified with real uploaded object-storage path).",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "GET /api/admin/employees", "issue": "Legacy users created before face feature do not have face_enrolled / face_photo_path fields in their Mongo docs, so the response omits them entirely. Frontend should treat missing as false. Consider defaulting these fields server-side via projection or migration."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_attendance_api.py",
+    "/app/backend/tests/conftest.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [
+    "Optional: backfill face_enrolled=false on legacy user docs OR set default in projection so admin UI never sees undefined.",
+    "Optional: in /api/admin/employees response, project face_enrolled with $ifNull so it is always returned."
+  ],
+  "critical_code_review_comments": [
+    "server.py face/enroll & checkin/checkout: object-storage 'put' is synchronous (requests.put) inside async handler - blocks the event loop. Consider httpx.AsyncClient or run in threadpool for production scale.",
+    "server.py /api/files/{path}: any authenticated user can fetch ANY file path - there's no ownership check. An employee could enumerate other users' face photos by guessing paths (paths include uuids so brute-force is hard, but path tokens leak through admin endpoints). Consider scoping access to admin OR file-owner.",
+    "server.py storage_key is a module-level mutable global; concurrent first-init may double-init. Add a lock or rely on idempotent init.",
+    "server.py FACE_MATCH_THRESHOLD=0.55 hardcoded - move to env / config for tuning without redeploy.",
+    "server.py admin/employees: legacy users miss face_enrolled key entirely. Project with $ifNull or set default at serialization.",
+    "AuthPhoto.jsx: handles errors with fallback, good - but when fallback is null (default), nothing renders and there is no visible error state for admin debugging.",
+    "FaceEnroll.jsx routes to admin or dashboard via user?.role read BEFORE checkAuth refresh fully resolves - tiny race; safe because checkAuth is awaited but worth double-checking.",
+    "Backend now_utc().date() used for 'today_str' is server-side UTC - users in IST will see day boundary shift at 5:30 AM local. If admin reports are expected per local day, add timezone awareness."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_attendance_api.py",
+    "/app/backend/tests/conftest.py"
+  ],
+  "success_rate": {"backend": "100% (18/18 pytest)", "frontend": "100% (7/7 playwright flows)"},
+  "test_credentials": "Seeded directly: admin TEST_user_admin01 / token TEST_session_admin_001 (face_enrolled=true, descriptor=[0.0]*128). Employee TEST_user_emp01 / token TEST_session_employee_001 (face_enrolled=true, same descriptor). Unenrolled TEST_user_emp_noface / TEST_session_unenrolled_001. Frontend: FE_admin / FE_emp tokens for redirect tests (cleaned up at end).",
+  "seed_data_creation": "pytest fixtures auto-seed users + sessions and clean up; one real face/enroll API call performed against object storage to obtain a valid photo path used in the photo-modal frontend test.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Backend pytest at /app/backend/tests/test_attendance_api.py. conftest seeds admin & employee with face_enrolled=true and a [0.0]*128 descriptor; matching check-in/out calls reuse that descriptor (face_distance ~ 0). To regression-test descriptor mismatch, send all-1.0 descriptor (euclidean ~11.3, well above 0.55 threshold). For /api/files/* tests you must first POST /api/face/enroll to upload a real object and reuse the returned photo_path. To test frontend admin photo modal end-to-end you must (a) seed a TEST_ attendance record with check_in_photo_path referencing an actually-uploaded object, and (b) set face_enrolled=true on the admin so they aren't redirected to /enroll. Headless face-capture UI cannot be e2e tested - skip.",
+  "rca of the issue": "Single backend minor: GET /api/admin/employees omits face_enrolled for legacy users (field missing in Mongo doc). Fix: project via $ifNull or migrate. No other bugs found - all face recognition, accuracy filtering (>500m skipped), photo storage/retrieval, and admin photo-modal flows work as specified."
+}
