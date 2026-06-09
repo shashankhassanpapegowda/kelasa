@@ -465,6 +465,8 @@ async def admin_employees(user: dict = Depends(require_admin)):
         u["is_on_duty"] = u["user_id"] in active_map
         u["today_minutes"] = today_minutes.get(u["user_id"], 0)
         u["today_sessions"] = today_counts.get(u["user_id"], 0)
+        u.setdefault("face_enrolled", False)
+        u.setdefault("face_photo_path", None)
     return {"employees": users}
 
 @api_router.patch("/admin/employees/{user_id}/role")
