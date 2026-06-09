@@ -29,7 +29,11 @@ export function AuthProvider({ children }) {
   }, [checkAuth]);
 
   const logout = async () => {
-    try { await api.post("/auth/logout"); } catch {}
+    try {
+      await api.post("/auth/logout");
+    } catch (err) {
+      console.warn("logout request failed", err);
+    }
     setUser(null);
   };
 

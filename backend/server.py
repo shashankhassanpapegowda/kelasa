@@ -271,7 +271,7 @@ async def download_file(path: str, request: Request, auth: Optional[str] = Query
     try:
         data, content_type = get_object(path)
     except Exception:
-        raise HTTPException(status_code=404, detail="File not found")
+        raise HTTPException(status_code=404, detail="File not found") from None
     return Response(content=data, media_type=content_type)
 
 # ---------- Attendance Routes ----------

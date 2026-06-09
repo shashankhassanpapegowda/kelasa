@@ -47,7 +47,9 @@ export default function FaceCapture({ open, title, subtitle, onClose, onCapture,
           try {
             const r = await detectFace(videoRef.current);
             setFaceDetected(!!r);
-          } catch {}
+          } catch (err) {
+            console.warn("face detection tick failed", err);
+          }
         }, 700);
       } catch (e) {
         setError(e?.message || "Could not access camera");
