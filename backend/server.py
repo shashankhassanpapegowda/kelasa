@@ -408,7 +408,8 @@ async def check_out(payload: CheckRequest, user: dict = Depends(get_current_user
     total_minutes = int((out_dt - check_in_dt).total_seconds() // 60)
     break_minutes = int(active.get("total_break_minutes", 0))
     net_minutes = max(total_minutes - break_minutes, 0)
-    break_max = int(user.get("break_max_minutes") or 60)
+    break_max_raw = user.get("break_max_minutes")
+    break_max = int(break_max_raw) if break_max_raw is not None else 60
     over_break = break_minutes > break_max
 
     await db.attendance.update_one(
