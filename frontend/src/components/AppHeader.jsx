@@ -1,6 +1,6 @@
 import { useAuth } from "@/lib/auth";
 import { Link, useLocation, useNavigate } from "react-router-dom";
-import { SignOut, Gauge, MapTrifold, Users } from "@phosphor-icons/react";
+import { SignOut, Gauge, MapTrifold, ChartBar } from "@phosphor-icons/react";
 
 export default function AppHeader() {
   const { user, logout } = useAuth();
@@ -26,7 +26,8 @@ export default function AppHeader() {
         <nav className="flex items-center gap-1">
           {isAdmin && (
             <>
-              <NavLink to="/admin" current={loc.pathname.startsWith("/admin")} icon={<Gauge size={16} weight="bold"/>} label="Console" testid="nav-admin"/>
+              <NavLink to="/admin" current={loc.pathname.startsWith("/admin") && loc.pathname !== "/admin/reports"} icon={<Gauge size={16} weight="bold"/>} label="Console" testid="nav-admin"/>
+              <NavLink to="/admin/reports" current={loc.pathname === "/admin/reports"} icon={<ChartBar size={16} weight="bold"/>} label="Reports" testid="nav-reports"/>
               <NavLink to="/dashboard" current={loc.pathname === "/dashboard"} icon={<MapTrifold size={16} weight="bold"/>} label="My Day" testid="nav-my-day"/>
             </>
           )}

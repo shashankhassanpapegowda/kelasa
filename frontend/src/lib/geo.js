@@ -1,10 +1,9 @@
-// High-accuracy geolocation helper.
-// Uses watchPosition to wait for a precise fix, falling back after a timeout.
+// High-accuracy geolocation: one-shot best fix + a live watcher utility.
 
 export function getAccuratePosition({
-  desiredAccuracy = 50,        // meters
-  fallbackAccuracy = 200,      // meters — what we'll accept if we can't reach desired
-  maxWait = 15000,             // ms total
+  desiredAccuracy = 50,
+  fallbackAccuracy = 200,
+  maxWait = 15000,
 } = {}) {
   return new Promise((resolve, reject) => {
     if (!navigator.geolocation) {
@@ -46,16 +45,38 @@ export function getAccuratePosition({
     setTimeout(() => {
       if (settled) return;
       navigator.geolocation.clearWatch(watchId);
-      if (best && best.accuracy <= fallbackAccuracy) {
+      if (best) {
         settled = true;
         resolve(best);
-      } else if (best) {
-        settled = true;
-        resolve(best); // accept anyway but caller can warn
       } else {
         settled = true;
         reject(new Error("Could not get a location fix"));
       }
     }, maxWait + 1000);
   });
+}
+
+/**
+ * Continuous live position watcher. Calls onUpdate({lat,lng,accuracy,timestamp})
+ * for every new GPS reading. Returns a stop() function.
+ * Filters out coarse readings (>500m).
+ */
+export function startLiveWatch(onUpdate, { maxAccuracy = 500 } = {}) {
+  if (!navigator.geolocation) return () => {};
+  const watchId = navigator.geolocation.watchPosition(
+    (pos) => {
+      if (pos.coords.accuracy > maxAccuracy) return;
+      onUpdate({
+        lat: pos.coords.latitude,
+        lng: pos.coords.longitude,
+        accuracy: pos.coords.accuracy,
+        timestamp: pos.timestamp,
+      });
+    },
+    (err) => console.warn("live watch error", err?.message),
+    { enableHighAccuracy: true, timeout: 30000, maximumAge: 5000 }
+  );
+  return () => {
+    try { navigator.geolocation.clearWatch(watchId); } catch (e) { /* noop */ }
+  };
 }

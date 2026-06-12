@@ -1,0 +1,43 @@
+{
+  "summary": "Iteration 3 — Shift mapping (per-employee), break flow (multi-break + paused location pings), late tracking (15-min grace), reports JSON+CSV, /admin/stats late_today, frontend Reports page and ShiftEditorModal all verified end-to-end. Backend: 34/34 pytest pass (16 new + 18 regression from iter2). Frontend: Reports page renders all 6 totals + table + CSV download works (Blob), Header nav-reports visible for admin, AdminPanel edit-shift-{id} opens shift-modal with shift-start/end/break-max inputs and PATCH succeeds (toast 'Shift updated' shown, employee row reflects new shift '10:00 – 19:00 · Break 45m'), Dashboard shows correct OFF/ON DUTY indicator and shift line.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "POST /api/attendance/checkout", "issue": "over_break truthiness bug: `break_max = int(user.get('break_max_minutes') or 60)` — when admin sets break_max_minutes=0 via PATCH, Python's `or` falls through to default 60 so over_break never triggers. Should be `... if value is not None else 60`. Low impact (0-minute break limit is unrealistic) but matches the same pattern present elsewhere (Reports.jsx fmtHm handles 0 correctly)."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_shift_breaks_reports.py",
+    "/app/backend/tests/test_attendance_api.py",
+    "/app/backend/tests/conftest.py",
+    "/app/test_reports/pytest/iter3_results.xml"
+  ],
+  "action_items": [
+    "(Optional, minor) server.py checkout: change `int(user.get('break_max_minutes') or 60)` to `int(user.get('break_max_minutes')) if user.get('break_max_minutes') is not None else 60` so explicit 0 isn't silently replaced by 60.",
+    "(Carried from iter2, still applicable) Project face_enrolled with $ifNull for legacy users in /admin/employees."
+  ],
+  "critical_code_review_comments": [
+    "server.py compute_late_minutes uses `int(diff)` which TRUNCATES negative diffs (e.g. -0.5 -> 0). With max(minutes-15, 0) it's fine, but if grace is ever lowered, early check-ins could compute as 0 instead of negative — acceptable for now.",
+    "server.py admin_reports_csv: `request: Request = None` default + manual auth bypasses Depends — works, but consider Depends(get_current_user_or_token) accepting `auth` query param uniformly so /api/files and /admin/reports.csv share one helper.",
+    "server.py break/start and break/end never validate that the user is checked-in same-day or in the right state — relies solely on check_out=None record. Multi-day stale 'active' records would leak breaks. Consider adding a stale-record cleanup.",
+    "Reports.jsx CSV download uses axios responseType:'blob' (good) — but error path swallows server detail; surface e?.response?.data text when content-type is json/text.",
+    "Dashboard.jsx PING_INTERVAL_MS=30s combined with watchPosition events fires only on movement; if user is stationary, no pings will ever be logged after the first. Worth keeping the timer-based ping AS A FALLBACK in addition to watchPosition (not regressing).",
+    "AdminPanel ShiftEditorModal not seen here — but PATCH endpoint returns 400 for break_max_minutes outside 0-600; client should validate before submit to avoid round trip.",
+    "server.py /admin/reports: build_report ignores users.created_at vs the range — counts absent_days even for dates BEFORE the employee joined. Will artificially inflate Shashank's absent_days = full range. Consider clamping start to max(from_date, user.created_at)."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_shift_breaks_reports.py"
+  ],
+  "success_rate": {"backend": "100% (34/34 pytest, 16 new this iter)", "frontend": "100% (Reports page + AdminPanel shift modal + Dashboard duty indicator)"},
+  "test_credentials": "Reused: admin TEST_user_admin01 / TEST_session_admin_001, employee TEST_user_emp01 / TEST_session_employee_001. New for late testing: TEST_user_late01 / TEST_session_late_001 (timezone=UTC, shift_start=00:00 to force late_by_minutes > 0 today). Frontend: FE3_user_admin01 / FE3_admin_session_001 (cleaned).",
+  "seed_data_creation": "pytest fixtures auto-seed and clean up. Mongoshell seed for frontend admin cleaned post-test.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "All iteration-3 features (shift PATCH, break/start, break/end, late tracking with grace, reports JSON, reports CSV with cookie/Bearer/?auth query, location ping skipped on_break, checkout blocked on_break, late_today in stats) have automated coverage in /app/backend/tests/test_shift_breaks_reports.py. To test late_by_minutes deterministically, seed a user with timezone='UTC' and shift_start='00:00'. The reports CSV endpoint accepts ?auth=<token> for browser-driven downloads. Note one minor truthiness bug: admin setting break_max_minutes=0 currently behaves like 60 due to `or 60` fallback in checkout handler — flagged but not blocking.",
+  "rca of the issue": "Single minor backend bug: over_break flag won't fire when admin sets break_max_minutes=0 because of Python truthiness fallback (`int(value or 60)`). Reproduction: PATCH /admin/employees/{id}/shift {break_max_minutes:0} → check-in → take any break → checkout returns over_break=false even though total_break_minutes>0. Mitigation: explicit None check. Low priority since 0-minute break limit is non-standard."
+}

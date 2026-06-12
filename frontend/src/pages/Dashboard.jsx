@@ -7,10 +7,10 @@ import { api } from "@/lib/api";
 import { toast } from "sonner";
 import { useAuth } from "@/lib/auth";
 import { useNavigate } from "react-router-dom";
-import { getAccuratePosition } from "@/lib/geo";
-import { Play, Stop, Clock, Path as PathIcon, MapPin, ArrowsClockwise, Camera, GpsFix, WarningCircle } from "@phosphor-icons/react";
+import { getAccuratePosition, startLiveWatch } from "@/lib/geo";
+import { Camera, Clock, Path as PathIcon, MapPin, ArrowsClockwise, GpsFix, WarningCircle, Coffee, ArrowCounterClockwise } from "@phosphor-icons/react";
 
-const PING_INTERVAL_MS = 60_000;
+const PING_INTERVAL_MS = 30_000;
 
 const fmtTime = (iso) => iso ? new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : "—";
 const fmtDate = (iso) => iso ? new Date(iso).toLocaleDateString([], { day: '2-digit', month: 'short' }) : "—";
@@ -19,7 +19,17 @@ const fmtDuration = (mins) => {
   const h = Math.floor(mins / 60); const m = mins % 60;
   return `${h}h ${m}m`;
 };
-const fmtAccuracy = (m) => m == null ? "—" : m < 1000 ? `±${Math.round(m)}m` : `±${(m/1000).toFixed(1)}km`;
+const fmtAccuracy = (m) => {
+  if (m == null) return "—";
+  if (m < 1000) return `±${Math.round(m)}m`;
+  return `±${(m/1000).toFixed(1)}km`;
+};
+const accClass = (m) => {
+  if (m == null) return "text-muted-foreground";
+  if (m > 200) return "text-[#FF3B30]";
+  if (m > 100) return "text-yellow-600";
+  return "text-[#00E676]";
+};
 
 export default function Dashboard() {
   const { user } = useAuth();
@@ -31,16 +41,16 @@ export default function Dashboard() {
   const [busy, setBusy] = useState(false);
   const [elapsed, setElapsed] = useState("00:00:00");
   const [faceOpen, setFaceOpen] = useState(false);
-  const [faceMode, setFaceMode] = useState("in"); // "in" | "out"
+  const [faceMode, setFaceMode] = useState("in");
   const [pendingGeo, setPendingGeo] = useState(null);
-  const [geoStatus, setGeoStatus] = useState({ accuracy: null, fetching: false });
+  const [livePos, setLivePos] = useState(null);
   const pingTimer = useRef(null);
   const tickTimer = useRef(null);
+  const liveStopRef = useRef(null);
+  const lastPingAtRef = useRef(0);
 
   useEffect(() => {
-    if (user && !user.face_enrolled) {
-      navigate("/enroll", { replace: true });
-    }
+    if (user && !user.face_enrolled) navigate("/enroll", { replace: true });
   }, [user, navigate]);
 
   const refresh = async () => {
@@ -57,10 +67,13 @@ export default function Dashboard() {
 
   useEffect(() => { refresh(); }, []);
 
+  // Elapsed clock + live watcher when active
   useEffect(() => {
     if (pingTimer.current) { clearInterval(pingTimer.current); pingTimer.current = null; }
     if (tickTimer.current) { clearInterval(tickTimer.current); tickTimer.current = null; }
-    if (!active) { setElapsed("00:00:00"); return; }
+    if (liveStopRef.current) { liveStopRef.current(); liveStopRef.current = null; }
+    if (!active) { setElapsed("00:00:00"); setLivePos(null); return; }
+
     const tick = () => {
       const start = new Date(active.check_in).getTime();
       const diff = Math.max(0, Math.floor((Date.now() - start) / 1000));
@@ -72,38 +85,42 @@ export default function Dashboard() {
     tick();
     tickTimer.current = setInterval(tick, 1000);
 
-    const sendPing = async () => {
-      try {
-        const g = await getAccuratePosition({ desiredAccuracy: 50, maxWait: 10000 });
-        await api.post("/location/ping", g);
-        const l = await api.get("/location/today");
-        setPings(l.data.pings || []);
-      } catch (e) {
-        console.warn("ping failed", e.message);
-      }
-    };
-    pingTimer.current = setInterval(sendPing, PING_INTERVAL_MS);
+    if (!active.on_break) {
+      // start LIVE watcher — pushes ping at most every PING_INTERVAL_MS
+      liveStopRef.current = startLiveWatch(async (p) => {
+        setLivePos(p);
+        const now = Date.now();
+        if (now - lastPingAtRef.current < PING_INTERVAL_MS) return;
+        lastPingAtRef.current = now;
+        try {
+          await api.post("/location/ping", p);
+          const l = await api.get("/location/today");
+          setPings(l.data.pings || []);
+        } catch (e) {
+          console.warn("ping failed", e?.response?.data?.detail || e.message);
+        }
+      });
+    }
+
     return () => {
       if (pingTimer.current) clearInterval(pingTimer.current);
       if (tickTimer.current) clearInterval(tickTimer.current);
+      if (liveStopRef.current) liveStopRef.current();
     };
-  }, [active?.record_id]);
+  }, [active?.record_id, active?.on_break]);
 
   const startCheck = async (mode) => {
     setBusy(true);
-    setGeoStatus({ accuracy: null, fetching: true });
     try {
       const g = await getAccuratePosition({ desiredAccuracy: 30, fallbackAccuracy: 150, maxWait: 15000 });
-      setGeoStatus({ accuracy: g.accuracy, fetching: false });
       if (g.accuracy > 200) {
-        toast.warning(`Low location accuracy (±${Math.round(g.accuracy)}m). Move outside / enable Precise Location for best results.`);
+        toast.warning(`Low GPS accuracy (±${Math.round(g.accuracy)}m). Move outside / enable Precise Location.`);
       }
       setPendingGeo(g);
       setFaceMode(mode);
       setFaceOpen(true);
     } catch (e) {
-      setGeoStatus({ accuracy: null, fetching: false });
-      toast.error(e?.message || "Could not get your location. Enable Precise Location.");
+      toast.error(e?.message || "Could not get your location.");
     } finally {
       setBusy(false);
     }
@@ -111,16 +128,17 @@ export default function Dashboard() {
 
   const handleFaceCapture = async ({ descriptor, image_b64 }) => {
     const payload = {
-      lat: pendingGeo.lat,
-      lng: pendingGeo.lng,
-      accuracy: pendingGeo.accuracy,
-      descriptor,
-      image_b64,
+      lat: pendingGeo.lat, lng: pendingGeo.lng, accuracy: pendingGeo.accuracy,
+      descriptor, image_b64,
     };
     try {
       if (faceMode === "in") {
-        await api.post("/attendance/checkin", payload);
-        toast.success("Checked in. Tracking started.");
+        const res = await api.post("/attendance/checkin", payload);
+        if (res.data.late_by_minutes > 0) {
+          toast.warning(`Checked in — you are ${res.data.late_by_minutes} min late.`);
+        } else {
+          toast.success("Checked in. Tracking started.");
+        }
       } else {
         await api.post("/attendance/checkout", payload);
         toast.success("Checked out. Session saved.");
@@ -134,7 +152,29 @@ export default function Dashboard() {
     }
   };
 
-  const todayMinutes = todayRecords.reduce((acc, r) => acc + (r.duration_minutes || 0), 0);
+  const handleBreak = async (action) => {
+    setBusy(true);
+    try {
+      let pos = {};
+      try {
+        const g = await getAccuratePosition({ desiredAccuracy: 100, maxWait: 8000 });
+        pos = { lat: g.lat, lng: g.lng };
+      } catch (_) { /* break location is optional */ }
+      const url = action === "start" ? "/attendance/break/start" : "/attendance/break/end";
+      await api.post(url, pos);
+      toast.success(action === "start" ? "Break started — tracking paused." : "Break ended — tracking resumed.");
+      await refresh();
+    } catch (e) {
+      toast.error(e?.response?.data?.detail || "Failed");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const todayMinutes = todayRecords.reduce((acc, r) => acc + (r.net_work_minutes || r.duration_minutes || 0), 0);
+  const todayBreakMinutes = todayRecords.reduce((acc, r) => acc + (r.total_break_minutes || 0), 0);
+  const onBreak = !!active?.on_break;
+  const lateBy = todayRecords[0]?.late_by_minutes ?? null;
 
   return (
     <div className="min-h-screen bg-background flex flex-col">
@@ -145,6 +185,11 @@ export default function Dashboard() {
             <div>
               <div className="label-overline" data-testid="dashboard-overline">My Day</div>
               <h1 className="text-3xl sm:text-4xl font-semibold tracking-tight mt-1">{new Date().toLocaleDateString([], { weekday:'long', day:'2-digit', month:'long' })}</h1>
+              {user?.shift_start && (
+                <div className="mt-2 text-xs font-mono text-muted-foreground">
+                  Shift · <span className="text-foreground">{user.shift_start}</span>{user.shift_end ? ` – ${user.shift_end}` : ""} · Break limit {user.break_max_minutes ?? 60}m
+                </div>
+              )}
             </div>
             <button onClick={refresh} className="text-xs label-overline flex items-center gap-2 hover:text-foreground" data-testid="refresh-btn">
               <ArrowsClockwise size={14} weight="bold"/> Refresh
@@ -154,13 +199,17 @@ export default function Dashboard() {
           {/* Status card */}
           <div className="mt-6 grid lg:grid-cols-3 gap-0 border border-border bg-card">
             <div className="lg:col-span-2 p-6 sm:p-8 border-b lg:border-b-0 lg:border-r border-border">
-              <div className="flex items-center gap-3">
-                <span className={`inline-block w-2.5 h-2.5 rounded-full ${active ? "bg-[#00E676]" : "bg-[#52525B]"}`} data-testid="duty-indicator"/>
-                <span className="label-overline" data-testid="duty-status">{active ? "ON DUTY" : "OFF DUTY"}</span>
-                {geoStatus.fetching && <span className="text-[10px] font-mono text-muted-foreground ml-2 inline-flex items-center gap-1"><GpsFix size={12} className="animate-pulse"/> getting GPS…</span>}
-                {geoStatus.accuracy != null && (
-                  <span className={`text-[10px] font-mono ml-2 inline-flex items-center gap-1 ${geoStatus.accuracy > 200 ? "text-[#FF3B30]" : geoStatus.accuracy > 100 ? "text-yellow-600" : "text-[#00E676]"}`}>
-                    <GpsFix size={12}/> {fmtAccuracy(geoStatus.accuracy)}
+              <div className="flex items-center gap-3 flex-wrap">
+                <span className={`inline-block w-2.5 h-2.5 rounded-full ${onBreak ? "bg-yellow-400" : active ? "bg-[#00E676]" : "bg-[#52525B]"}`} data-testid="duty-indicator"/>
+                <span className="label-overline" data-testid="duty-status">{onBreak ? "ON BREAK" : active ? "ON DUTY" : "OFF DUTY"}</span>
+                {livePos && !onBreak && (
+                  <span className={`text-[10px] font-mono inline-flex items-center gap-1 ${accClass(livePos.accuracy)}`}>
+                    <GpsFix size={12} className="animate-pulse"/> LIVE · {fmtAccuracy(livePos.accuracy)}
+                  </span>
+                )}
+                {lateBy > 0 && (
+                  <span className="text-[10px] font-mono uppercase tracking-wider bg-[#FF3B30] text-white px-1.5 py-0.5">
+                    LATE BY {lateBy}m
                   </span>
                 )}
               </div>
@@ -175,32 +224,54 @@ export default function Dashboard() {
                     <div className="font-mono text-lg" data-testid="start-time">{fmtTime(active.check_in)}</div>
                   </div>
                 )}
+                {active && (
+                  <div>
+                    <div className="label-overline mb-1">Breaks Today</div>
+                    <div className="font-mono text-lg" data-testid="break-total">{todayBreakMinutes}m</div>
+                  </div>
+                )}
               </div>
-              <div className="mt-8">
+
+              <div className="mt-8 flex flex-wrap items-center gap-3">
                 {!active ? (
                   <button onClick={() => startCheck("in")} disabled={busy} data-testid="check-in-btn"
                     className="bg-foreground text-background px-6 py-4 inline-flex items-center gap-3 hover:bg-primary disabled:opacity-50 transition-colors">
                     <Camera size={18} weight="bold"/>
-                    <span className="font-medium">Face Check-In · Start Tracking</span>
+                    <span className="font-medium">Face Check-In</span>
                   </button>
                 ) : (
-                  <button onClick={() => startCheck("out")} disabled={busy} data-testid="check-out-btn"
-                    className="bg-[#FF3B30] text-white px-6 py-4 inline-flex items-center gap-3 hover:bg-[#d93128] disabled:opacity-50 transition-colors">
-                    <Camera size={18} weight="bold"/>
-                    <span className="font-medium">Face Check-Out · End Session</span>
-                  </button>
+                  <>
+                    <button onClick={() => startCheck("out")} disabled={busy || onBreak} data-testid="check-out-btn"
+                      className="bg-[#FF3B30] text-white px-6 py-4 inline-flex items-center gap-3 hover:bg-[#d93128] disabled:opacity-50 transition-colors">
+                      <Camera size={18} weight="bold"/>
+                      <span className="font-medium">Face Check-Out</span>
+                    </button>
+                    {!onBreak ? (
+                      <button onClick={() => handleBreak("start")} disabled={busy} data-testid="break-start-btn"
+                        className="border border-border bg-card px-5 py-4 inline-flex items-center gap-2 hover:bg-secondary disabled:opacity-50">
+                        <Coffee size={16} weight="bold"/>
+                        <span className="font-medium">Start Break</span>
+                      </button>
+                    ) : (
+                      <button onClick={() => handleBreak("end")} disabled={busy} data-testid="break-end-btn"
+                        className="bg-yellow-400 text-black px-5 py-4 inline-flex items-center gap-2 hover:bg-yellow-300 disabled:opacity-50">
+                        <ArrowCounterClockwise size={16} weight="bold"/>
+                        <span className="font-medium">End Break · Resume</span>
+                      </button>
+                    )}
+                  </>
                 )}
-                {busy && <div className="loading-bar mt-4"/>}
-                <p className="mt-3 text-xs text-muted-foreground flex items-start gap-1.5 max-w-md">
-                  <WarningCircle size={14} weight="bold" className="mt-0.5 shrink-0"/>
-                  Allow camera + <strong>Precise Location</strong>. Coarse / WiFi-based location can be off by 10+ km.
-                </p>
+                {busy && <div className="loading-bar w-full mt-2"/>}
               </div>
+              <p className="mt-3 text-xs text-muted-foreground flex items-start gap-1.5 max-w-md">
+                <WarningCircle size={14} weight="bold" className="mt-0.5 shrink-0"/>
+                Allow camera + <strong>Precise Location</strong>. Location tracking pauses during breaks.
+              </p>
             </div>
 
             <div className="grid grid-cols-2 lg:grid-cols-1">
               <Stat label="Today Sessions" value={todayRecords.length} testid="stat-sessions"/>
-              <Stat label="Today Worked" value={fmtDuration(todayMinutes)} testid="stat-worked"/>
+              <Stat label="Net Work Today" value={fmtDuration(todayMinutes)} testid="stat-worked"/>
               <Stat label="Pings Logged" value={pings.length} testid="stat-pings" full/>
             </div>
           </div>
@@ -220,7 +291,7 @@ export default function Dashboard() {
                   <div className="h-full grid place-items-center text-sm text-muted-foreground p-6 text-center">
                     <div>
                       <MapPin size={28} weight="thin" className="mx-auto mb-3 opacity-50"/>
-                      Check in to start tracking your route. Pings record every minute.
+                      Check in to start tracking your route. Live GPS updates as you move.
                     </div>
                   </div>
                 ) : <MapView pings={pings}/>}
@@ -238,19 +309,21 @@ export default function Dashboard() {
                 {history.length === 0 && <div className="p-6 text-sm text-muted-foreground">No history yet.</div>}
                 {history.map(r => (
                   <div key={r.record_id} className="p-4 flex items-center gap-3">
-                    <AuthPhoto
-                      path={r.check_in_photo_path}
-                      className="w-12 h-12 object-cover border border-border"
-                      fallback={<div className="w-12 h-12 bg-secondary border border-border"/>}
-                    />
+                    <AuthPhoto path={r.check_in_photo_path} className="w-12 h-12 object-cover border border-border"
+                      fallback={<div className="w-12 h-12 bg-secondary border border-border"/>}/>
                     <div className="flex-1 min-w-0">
-                      <div className="text-sm font-medium">{fmtDate(r.check_in)}</div>
+                      <div className="flex items-center gap-2">
+                        <div className="text-sm font-medium">{fmtDate(r.check_in)}</div>
+                        {r.late_by_minutes > 0 && <span className="text-[9px] font-mono uppercase bg-[#FF3B30]/15 text-[#FF3B30] px-1">+{r.late_by_minutes}m late</span>}
+                        {r.over_break && <span className="text-[9px] font-mono uppercase bg-yellow-500/20 text-yellow-700 px-1">over-break</span>}
+                      </div>
                       <div className="font-mono text-xs text-muted-foreground mt-0.5">
                         {fmtTime(r.check_in)} → {r.check_out ? fmtTime(r.check_out) : "active"}
+                        {r.total_break_minutes > 0 && <span> · {r.total_break_minutes}m break</span>}
                       </div>
                     </div>
                     <div className="text-right">
-                      <div className="font-mono text-sm font-semibold">{r.duration_minutes != null ? fmtDuration(r.duration_minutes) : "—"}</div>
+                      <div className="font-mono text-sm font-semibold">{fmtDuration(r.net_work_minutes ?? r.duration_minutes)}</div>
                       <div className="text-[10px] label-overline mt-0.5">{r.status}</div>
                     </div>
                   </div>

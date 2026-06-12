@@ -7,6 +7,7 @@ import AuthCallback from "@/pages/AuthCallback";
 import Dashboard from "@/pages/Dashboard";
 import AdminPanel from "@/pages/AdminPanel";
 import FaceEnroll from "@/pages/FaceEnroll";
+import Reports from "@/pages/Reports";
 
 function ProtectedRoute({ children, adminOnly = false, skipFaceCheck = false }) {
   const { user, loading } = useAuth();
@@ -45,6 +46,7 @@ function AppRouter() {
       <Route path="/enroll" element={<ProtectedRoute skipFaceCheck><FaceEnroll/></ProtectedRoute>}/>
       <Route path="/dashboard" element={<ProtectedRoute><Dashboard/></ProtectedRoute>}/>
       <Route path="/admin" element={<ProtectedRoute adminOnly><AdminPanel/></ProtectedRoute>}/>
+      <Route path="/admin/reports" element={<ProtectedRoute adminOnly><Reports/></ProtectedRoute>}/>
       <Route path="*" element={<Navigate to="/" replace/>}/>
     </Routes>
   );
