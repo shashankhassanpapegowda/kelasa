@@ -1,5 +1,5 @@
 import { createContext, useContext, useEffect, useState, useCallback } from "react";
-import { api } from "@/lib/api";
+import { api, setToken, setUnauthorizedHandler } from "@/lib/api";
 
 const AuthContext = createContext(null);
 
@@ -19,8 +19,15 @@ export function AuthProvider({ children }) {
   }, []);
 
   useEffect(() => {
-    // CRITICAL: If returning from OAuth callback, skip the /me check.
-    // AuthCallback will exchange the session_id and establish the session first.
+    // Wire global 401 handler — any expired session kicks user back to login cleanly.
+    setUnauthorizedHandler(() => {
+      setUser(null);
+      setToken(null);
+      if (window.location.pathname !== "/") {
+        window.location.replace("/");
+      }
+    });
+    // If returning from OAuth, let AuthCallback handle it first.
     if (window.location.hash?.includes("session_id=")) {
       setLoading(false);
       return;
@@ -34,6 +41,7 @@ export function AuthProvider({ children }) {
     } catch (err) {
       console.warn("logout request failed", err);
     }
+    setToken(null);
     setUser(null);
   };
 

@@ -270,7 +270,7 @@ async def auth_session(payload: SessionExchange, response: Response):
         max_age=7 * 24 * 60 * 60, httponly=True, secure=True, samesite="none", path="/",
     )
     user_doc = await db.users.find_one({"user_id": user_id}, {"_id": 0, "face_descriptor": 0})
-    return {"user": user_doc}
+    return {"user": user_doc, "session_token": session_token}
 
 @api_router.get("/auth/me")
 async def get_me(user: dict = Depends(get_current_user)):

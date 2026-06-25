@@ -1,6 +1,6 @@
 import { useEffect, useRef } from "react";
 import { useNavigate } from "react-router-dom";
-import { api } from "@/lib/api";
+import { api, setToken } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 
 export default function AuthCallback() {
@@ -21,6 +21,9 @@ export default function AuthCallback() {
     (async () => {
       try {
         const res = await api.post("/auth/session", { session_id: sessionId });
+        if (res.data.session_token) {
+          setToken(res.data.session_token);
+        }
         setUser(res.data.user);
         window.history.replaceState(null, "", "/dashboard");
         if (res.data.user.role === "admin") {
