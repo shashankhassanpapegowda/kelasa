@@ -79,6 +79,16 @@ export default function AdminPanel() {
     } catch { toast.error("Reset failed"); }
   };
 
+  const toggleTrackingMode = async (emp) => {
+    const next = emp.tracking_mode === "always_on" ? "duty_only" : "always_on";
+    if (next === "always_on" && !confirm(`Enable 24/7 ALWAYS-ON tracking for ${emp.name}?\n\nThis tracks location whenever they are signed in, NOT just during their shift. Make sure you have written employee consent — Indian privacy law requires it.`)) return;
+    try {
+      await api.patch(`/admin/employees/${emp.user_id}/tracking_mode`, { tracking_mode: next });
+      toast.success(`${emp.name} → ${next === "always_on" ? "24/7 tracking" : "duty-only tracking"}`);
+      refresh();
+    } catch (e) { toast.error(e?.response?.data?.detail || "Update failed"); }
+  };
+
   const saveShift = async (form) => {
     try {
       await api.patch(`/admin/employees/${shiftEditor.user_id}/shift`, form);
@@ -138,6 +148,7 @@ export default function AdminPanel() {
                         {emp.is_on_duty && !emp.on_break && <span className="text-[10px] font-mono uppercase tracking-wider bg-[#00E676] text-black px-1.5 py-0.5">ON DUTY</span>}
                         {emp.on_break && <span className="text-[10px] font-mono uppercase tracking-wider bg-yellow-400 text-black px-1.5 py-0.5">ON BREAK</span>}
                         {emp.role === "admin" && <span className="text-[10px] font-mono uppercase tracking-wider border border-border px-1.5 py-0.5">ADMIN</span>}
+                        {emp.tracking_mode === "always_on" && <span className="text-[10px] font-mono uppercase tracking-wider bg-[#0047FF] text-white px-1.5 py-0.5">24/7</span>}
                         {!emp.face_enrolled && <span className="text-[10px] font-mono uppercase tracking-wider bg-yellow-500/20 text-yellow-700 px-1.5 py-0.5">NOT ENROLLED</span>}
                       </div>
                       <div className="text-xs text-muted-foreground truncate">{emp.email}</div>
@@ -156,6 +167,9 @@ export default function AdminPanel() {
                         </button>
                         <button onClick={(e) => { e.stopPropagation(); toggleRole(emp); }} className="text-[10px] label-overline hover:text-primary" data-testid={`toggle-role-${emp.user_id}`}>
                           {emp.role === "admin" ? "→ EMP" : "→ ADMIN"}
+                        </button>
+                        <button onClick={(e) => { e.stopPropagation(); toggleTrackingMode(emp); }} className="text-[10px] label-overline hover:text-primary" data-testid={`toggle-tracking-${emp.user_id}`}>
+                          {emp.tracking_mode === "always_on" ? "→ DUTY ONLY" : "→ 24/7"}
                         </button>
                         {emp.face_enrolled && (
                           <button onClick={(e) => { e.stopPropagation(); resetFace(emp); }} className="text-[10px] label-overline hover:text-[#FF3B30]" data-testid={`reset-face-${emp.user_id}`}>

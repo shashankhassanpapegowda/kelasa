@@ -127,6 +127,9 @@ class ShiftUpdate(BaseModel):
     break_max_minutes: Optional[int] = None
     timezone: Optional[str] = None
 
+class TrackingModeUpdate(BaseModel):
+    tracking_mode: str  # "duty_only" | "always_on"
+
 # ---------- Helpers ----------
 def now_utc() -> datetime:
     return datetime.now(timezone.utc)
@@ -254,6 +257,7 @@ async def auth_session(payload: SessionExchange, response: Response):
             "shift_end": None,
             "break_max_minutes": 60,
             "timezone": DEFAULT_TZ,
+            "tracking_mode": "duty_only",
             "created_at": now_utc().isoformat(),
         })
 
@@ -610,6 +614,7 @@ async def admin_employees(user: dict = Depends(require_admin)):
         u.setdefault("shift_end", None)
         u.setdefault("break_max_minutes", 60)
         u.setdefault("timezone", DEFAULT_TZ)
+        u.setdefault("tracking_mode", "duty_only")
     return {"employees": users}
 
 @api_router.patch("/admin/employees/{user_id}/role")
@@ -657,6 +662,17 @@ async def admin_set_shift(user_id: str, payload: ShiftUpdate, user: dict = Depen
         raise HTTPException(status_code=404, detail="User not found")
     emp = await db.users.find_one({"user_id": user_id}, {"_id": 0, "face_descriptor": 0})
     return {"ok": True, "employee": emp}
+
+@api_router.patch("/admin/employees/{user_id}/tracking_mode")
+async def admin_set_tracking_mode(user_id: str, payload: TrackingModeUpdate, user: dict = Depends(require_admin)):
+    if payload.tracking_mode not in ("duty_only", "always_on"):
+        raise HTTPException(status_code=400, detail="tracking_mode must be 'duty_only' or 'always_on'")
+    res = await db.users.update_one({"user_id": user_id}, {"$set": {"tracking_mode": payload.tracking_mode}})
+    if res.matched_count == 0:
+        raise HTTPException(status_code=404, detail="User not found")
+    emp = await db.users.find_one({"user_id": user_id}, {"_id": 0, "face_descriptor": 0})
+    return {"ok": True, "employee": emp}
+
 
 @api_router.get("/admin/employees/{user_id}/route")
 async def admin_employee_route(user_id: str, date: Optional[str] = None, user: dict = Depends(require_admin)):
