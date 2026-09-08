@@ -821,7 +821,7 @@ async def admin_reports_csv(
 
 @api_router.get("/")
 async def root():
-    return {"message": "Attendance & Field Work API", "status": "ok"}
+    return {"message": "Kelasa API", "status": "ok"}
 
 app.include_router(api_router)
 
