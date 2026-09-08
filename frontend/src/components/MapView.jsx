@@ -37,8 +37,8 @@ export default function MapView({ pings = [], height = "100%" }) {
         scrollWheelZoom={true}
       >
         <TileLayer
-          attribution='&copy; OpenStreetMap, &copy; CartoDB'
-          url="https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png"
+          attribution='&copy; OpenStreetMap contributors'
+          url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
         />
         {polyline.length > 1 && (
           <Polyline positions={polyline} pathOptions={{ color: "#0047FF", weight: 4, opacity: 0.85 }}/>

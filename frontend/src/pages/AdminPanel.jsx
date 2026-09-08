@@ -1,10 +1,19 @@
 import { useEffect, useState } from "react";
 import AppHeader from "@/components/AppHeader";
 import MapView from "@/components/MapView";
+import LiveMap from "@/components/LiveMap";
 import AuthPhoto from "@/components/AuthPhoto";
 import { api, API } from "@/lib/api";
 import { toast } from "sonner";
-import { Users, Pulse, Clock, CheckSquare, ArrowsClockwise, Path as PathIcon, X, ArrowSquareOut, GpsFix, Clock as ClockIcon, WarningCircle, PencilSimple } from "@phosphor-icons/react";
+import { Users, Pulse, Clock, CheckSquare, ArrowsClockwise, Path as PathIcon, X, ArrowSquareOut, GpsFix, Clock as ClockIcon, WarningCircle, PencilSimple, Broadcast } from "@phosphor-icons/react";
+
+const fmtAgo = (iso) => {
+  if (!iso) return "no ping yet";
+  const s = Math.max(0, Math.floor((Date.now() - new Date(iso).getTime()) / 1000));
+  if (s < 60) return `${s}s ago`;
+  if (s < 3600) return `${Math.floor(s / 60)}m ago`;
+  return `${Math.floor(s / 3600)}h ago`;
+};
 
 const fmtTime = (iso) => iso ? new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : "—";
 const fmtDuration = (mins) => {
@@ -34,6 +43,8 @@ export default function AdminPanel() {
   const [loading, setLoading] = useState(false);
   const [photoModal, setPhotoModal] = useState(null);
   const [shiftEditor, setShiftEditor] = useState(null);
+  const [liveEmployees, setLiveEmployees] = useState([]);
+  const [liveOn, setLiveOn] = useState(true);
 
   const refresh = async () => {
     setLoading(true);
@@ -52,6 +63,20 @@ export default function AdminPanel() {
   };
 
   useEffect(() => { refresh(); }, [date]);
+
+  const fetchLive = async () => {
+    try {
+      const res = await api.get("/admin/live");
+      setLiveEmployees(res.data.employees || []);
+    } catch { /* silent — polling */ }
+  };
+
+  useEffect(() => {
+    if (!liveOn) return;
+    fetchLive();
+    const id = setInterval(fetchLive, 15000);
+    return () => clearInterval(id);
+  }, [liveOn]);
 
   const openEmp = async (emp) => {
     setSelectedEmp(emp);
@@ -127,6 +152,63 @@ export default function AdminPanel() {
             <StatBlock label="Work Hrs Today" value={fmtDuration(stats?.total_work_minutes_today)} icon={<Clock size={18} weight="bold"/>} testid="stat-workhours"/>
           </div>
           {loading && <div className="loading-bar mt-2"/>}
+
+          <div className="mt-6 border border-border bg-card">
+            <div className="p-4 flex items-center justify-between border-b border-border flex-wrap gap-2">
+              <div className="flex items-center gap-2">
+                <Broadcast size={16} weight="bold" className={liveOn ? "text-[#00E676]" : "text-muted-foreground"}/>
+                <span className="label-overline">Live Field Map</span>
+                <span className="text-xs text-muted-foreground ml-1 hidden sm:inline">
+                  {liveEmployees.filter(e => e.lat != null).length} tracking · refreshes every 15s
+                </span>
+              </div>
+              <div className="flex items-center gap-3">
+                <span className="font-mono text-xs text-muted-foreground" data-testid="live-count">{liveEmployees.length} ON DUTY</span>
+                <button
+                  onClick={() => setLiveOn(v => !v)}
+                  data-testid="live-toggle"
+                  className={`text-[10px] label-overline flex items-center gap-1.5 border px-2 py-1 transition-colors ${liveOn ? "border-[#00E676] text-[#00E676]" : "border-border text-muted-foreground hover:text-foreground"}`}
+                >
+                  <span className={`w-1.5 h-1.5 rounded-full ${liveOn ? "bg-[#00E676] animate-pulse" : "bg-muted-foreground"}`}/>
+                  {liveOn ? "LIVE" : "PAUSED"}
+                </button>
+              </div>
+            </div>
+            <div className="grid lg:grid-cols-3">
+              <div className="lg:col-span-2 h-[440px] border-b lg:border-b-0 lg:border-r border-border">
+                {liveEmployees.length === 0 ? (
+                  <div className="h-full grid place-items-center text-sm text-muted-foreground p-6 text-center" data-testid="live-empty">No one is on duty right now.</div>
+                ) : <LiveMap employees={liveEmployees}/>}
+              </div>
+              <div className="max-h-[440px] overflow-y-auto" data-testid="live-list">
+                <div className="p-4 border-b border-border"><span className="label-overline">On Duty · Now</span></div>
+                <div className="divide-y divide-border">
+                  {liveEmployees.map(e => (
+                    <div key={e.user_id} className="p-3 flex items-center gap-3 hover:bg-secondary/40 cursor-pointer" onClick={() => openEmp(e)} data-testid={`live-row-${e.user_id}`}>
+                      <AuthPhoto path={e.face_photo_path} className="w-9 h-9 rounded-full object-cover border border-border"
+                        fallback={e.picture
+                          ? <img src={e.picture} className="w-9 h-9 rounded-full border border-border" alt=""/>
+                          : <div className="w-9 h-9 rounded-full bg-secondary grid place-items-center text-xs font-medium">{e.name?.[0]}</div>
+                        }/>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2">
+                          <span className="text-sm font-medium truncate">{e.name}</span>
+                          {e.on_break
+                            ? <span className="text-[9px] font-mono uppercase tracking-wider bg-yellow-400 text-black px-1.5 py-0.5">BREAK</span>
+                            : <span className="text-[9px] font-mono uppercase tracking-wider bg-[#00E676] text-black px-1.5 py-0.5">DUTY</span>}
+                        </div>
+                        <div className="text-[10px] font-mono text-muted-foreground mt-0.5 flex items-center gap-1.5">
+                          <GpsFix size={10} weight="bold" className={e.lat != null ? accClass(e.accuracy) : "text-muted-foreground"}/>
+                          {e.lat != null ? `${fmtAcc(e.accuracy)} · ${fmtAgo(e.last_ping)}` : "awaiting GPS"}
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                  {liveEmployees.length === 0 && <div className="p-6 text-sm text-muted-foreground">Nobody checked in.</div>}
+                </div>
+              </div>
+            </div>
+          </div>
 
           <div className="mt-6 grid lg:grid-cols-2 gap-0 border border-border bg-card">
             <div className="lg:border-r border-border border-b lg:border-b-0">

@@ -674,6 +674,38 @@ async def admin_set_tracking_mode(user_id: str, payload: TrackingModeUpdate, use
     return {"ok": True, "employee": emp}
 
 
+@api_router.get("/admin/live")
+async def admin_live(user: dict = Depends(require_admin)):
+    """All currently on-duty employees with their latest known location."""
+    actives = await db.attendance.find({"check_out": None}, {"_id": 0}).to_list(1000)
+    result = []
+    for a in actives:
+        emp = await db.users.find_one(
+            {"user_id": a["user_id"]}, {"_id": 0, "face_descriptor": 0}
+        )
+        if not emp:
+            continue
+        latest = await db.locations.find_one(
+            {"user_id": a["user_id"], "record_id": a["record_id"]},
+            {"_id": 0}, sort=[("timestamp", -1)]
+        )
+        result.append({
+            "user_id": a["user_id"],
+            "name": emp.get("name"),
+            "email": emp.get("email"),
+            "picture": emp.get("picture"),
+            "face_photo_path": emp.get("face_photo_path"),
+            "on_break": bool(a.get("on_break")),
+            "check_in": a.get("check_in"),
+            "shift_start": emp.get("shift_start"),
+            "shift_end": emp.get("shift_end"),
+            "lat": latest.get("lat") if latest else None,
+            "lng": latest.get("lng") if latest else None,
+            "accuracy": latest.get("accuracy") if latest else None,
+            "last_ping": latest.get("timestamp") if latest else None,
+        })
+    return {"employees": result, "server_time": now_utc().isoformat()}
+
 @api_router.get("/admin/employees/{user_id}/route")
 async def admin_employee_route(user_id: str, date: Optional[str] = None, user: dict = Depends(require_admin)):
     emp = await db.users.find_one({"user_id": user_id}, {"_id": 0, "face_descriptor": 0})
