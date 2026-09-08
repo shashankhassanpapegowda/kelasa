@@ -14,22 +14,22 @@ export default function Login() {
         <div className="flex items-center gap-3">
           <img
             src="https://customer-assets.emergentagent.com/job_employee-locator-4/artifacts/5n0qsrf7_GTG%20LOGO%20BLACK.png"
-            alt="Gyarahalli Thammayya Groups"
+            alt="Kelasa"
             className="brand-logo w-14 h-14 object-contain"
           />
           <div className="flex flex-col leading-tight">
-            <span className="text-xs label-overline">Powered by</span>
-            <span className="font-semibold tracking-tight">Gyarahalli Thammayya Groups</span>
+            <span className="text-2xl font-semibold" style={{ fontFamily: "'Hubballi', sans-serif" }}>ಕೆಲಸ</span>
+            <span className="text-xs label-overline">Kelasa</span>
           </div>
         </div>
 
         <div className="max-w-md">
-          <div className="label-overline mb-4" data-testid="login-overline">Field Operations Console</div>
+          <div className="label-overline mb-4" data-testid="login-overline">Welcome to Kelasa</div>
           <h1 className="text-5xl lg:text-6xl font-semibold tracking-tight leading-[1.05]">
             <span style={{ fontFamily: "'Hubballi', sans-serif" }}>ಕೆಲಸ</span><br/>Kelasa<span className="text-primary">.</span>
           </h1>
           <p className="mt-6 text-muted-foreground text-base leading-relaxed">
-            Track presence. Plot routes. Measure on-site work — with precision and zero friction across web and Android.
+            Bring your whole field team together — attendance, live routes and on-site hours, all in one calm, reliable place. Sign in to pick up right where the day left off.
           </p>
 
           <button
@@ -40,13 +40,23 @@ export default function Login() {
             <span className="font-medium tracking-tight">Continue with Google</span>
             <ArrowRight size={18} weight="bold" className="transition-transform group-hover:translate-x-1"/>
           </button>
-          <p className="mt-4 text-xs text-muted-foreground">Secured by Emergent Auth · First user becomes admin automatically.</p>
+          <p className="mt-4 text-xs text-muted-foreground">Secured by Google sign-in — your data stays private.</p>
         </div>
 
-        <div className="grid grid-cols-3 gap-0 border-t border-border pt-6">
-          <Feature icon={<MapTrifold size={18} weight="bold"/>} label="Live Routes"/>
-          <Feature icon={<ClockClockwise size={18} weight="bold"/>} label="Auto Hours"/>
-          <Feature icon={<ShieldCheck size={18} weight="bold"/>} label="Role Access"/>
+        <div className="border-t border-border pt-6 space-y-6">
+          <div className="grid grid-cols-3 gap-0">
+            <Feature icon={<MapTrifold size={18} weight="bold"/>} label="Live Routes"/>
+            <Feature icon={<ClockClockwise size={18} weight="bold"/>} label="Auto Hours"/>
+            <Feature icon={<ShieldCheck size={18} weight="bold"/>} label="Role Access"/>
+          </div>
+          <div className="flex items-center gap-2.5 text-muted-foreground" data-testid="powered-by">
+            <img
+              src="https://customer-assets.emergentagent.com/job_employee-locator-4/artifacts/5n0qsrf7_GTG%20LOGO%20BLACK.png"
+              alt="Gyarahalli Thammayya Groups"
+              className="w-6 h-6 object-contain opacity-70"
+            />
+            <span className="text-[11px] tracking-wide">Powered by Gyarahalli Thammayya Groups</span>
+          </div>
         </div>
       </div>
 
@@ -58,20 +68,21 @@ export default function Login() {
         }}/>
         <div className="relative h-full flex flex-col justify-between p-12 text-white">
           <div className="flex items-center justify-between">
-            <span className="label-overline text-white/60">v1.0 / Field Console</span>
-            <span className="font-mono text-xs text-white/40">// REC LIVE</span>
+            <span className="label-overline text-white/60">Field Console</span>
+            <span className="font-mono text-xs text-white/40">// LIVE</span>
           </div>
-          <div className="space-y-6">
-            <div className="font-mono text-xs text-white/60 grid gap-1">
-              <div>SECTOR_07 / KARNATAKA</div>
-              <div>NODES: 24 ACTIVE</div>
-              <div>SYNC: 00:00:01</div>
-            </div>
-            <div className="border-t border-white/15 pt-6">
-              <p className="text-2xl font-semibold tracking-tight max-w-md leading-snug">
-                Every check-in is a coordinate. Every coordinate is accountability.
-              </p>
-            </div>
+          <div className="border-t border-white/15 pt-6 max-w-md">
+            <p className="text-2xl font-semibold tracking-tight leading-snug">
+              For the people who keep the work moving — every day, on the ground.
+            </p>
+            <p className="mt-4 text-white/60 text-sm leading-relaxed">
+              Kelasa turns each check-in into a clear, honest picture of the day — so your team is trusted and every hour is fairly counted.
+            </p>
+          </div>
+          <div className="font-mono text-xs text-white/50 grid gap-1">
+            <div>SECTOR_07 / KARNATAKA</div>
+            <div>NODES: 24 ACTIVE</div>
+            <div>SYNC: 00:00:01</div>
           </div>
         </div>
       </div>
