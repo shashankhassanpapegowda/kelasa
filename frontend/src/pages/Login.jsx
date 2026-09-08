@@ -26,7 +26,7 @@ export default function Login() {
         <div className="max-w-md">
           <div className="label-overline mb-4" data-testid="login-overline">Field Operations Console</div>
           <h1 className="text-5xl lg:text-6xl font-semibold tracking-tight leading-[1.05]">
-            <span style={{ fontFamily: "'Noto Sans Kannada', sans-serif" }}>ಕೆಲಸ</span><br/>Kelasa<span className="text-primary">.</span>
+            <span style={{ fontFamily: "'Hubballi', sans-serif" }}>ಕೆಲಸ</span><br/>Kelasa<span className="text-primary">.</span>
           </h1>
           <p className="mt-6 text-muted-foreground text-base leading-relaxed">
             Track presence. Plot routes. Measure on-site work — with precision and zero friction across web and Android.

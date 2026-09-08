@@ -19,7 +19,7 @@ export default function AppHeader() {
           />
           <div className="hidden sm:flex flex-col leading-tight">
             <span className="text-[10px] label-overline">Gyarahalli Thammayya</span>
-            <span className="text-sm font-semibold tracking-tight"><span style={{ fontFamily: "'Noto Sans Kannada', sans-serif" }}>ಕೆಲಸ</span> · Kelasa</span>
+            <span className="text-sm font-semibold tracking-tight"><span style={{ fontFamily: "'Hubballi', sans-serif" }}>ಕೆಲಸ</span> · Kelasa</span>
           </div>
         </Link>
 

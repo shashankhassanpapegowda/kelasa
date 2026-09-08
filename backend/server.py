@@ -689,6 +689,12 @@ async def admin_live(user: dict = Depends(require_admin)):
             {"user_id": a["user_id"], "record_id": a["record_id"]},
             {"_id": 0}, sort=[("timestamp", -1)]
         )
+        hour_ago = (now_utc() - timedelta(hours=1)).isoformat()
+        trail_docs = await db.locations.find(
+            {"user_id": a["user_id"], "record_id": a["record_id"], "timestamp": {"$gte": hour_ago}},
+            {"_id": 0, "lat": 1, "lng": 1, "timestamp": 1}
+        ).sort("timestamp", 1).to_list(2000)
+        trail = [{"lat": t["lat"], "lng": t["lng"], "timestamp": t["timestamp"]} for t in trail_docs]
         result.append({
             "user_id": a["user_id"],
             "name": emp.get("name"),
@@ -703,6 +709,7 @@ async def admin_live(user: dict = Depends(require_admin)):
             "lng": latest.get("lng") if latest else None,
             "accuracy": latest.get("accuracy") if latest else None,
             "last_ping": latest.get("timestamp") if latest else None,
+            "trail": trail,
         })
     return {"employees": result, "server_time": now_utc().isoformat()}
 
