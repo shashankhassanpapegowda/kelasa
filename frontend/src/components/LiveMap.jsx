@@ -70,7 +70,7 @@ export default function LiveMap({ employees = [], height = "100%" }) {
               radius={9}
               pathOptions={{ color: colorFor(e.user_id), fillColor: status, fillOpacity: 1, weight: 4 }}
             >
-              <Tooltip direction="top" permanent offset={[0, -8]}>
+              <Tooltip direction="top" offset={[0, -10]} opacity={1} className="kelasa-map-label">
                 <div className="font-mono text-[10px] font-semibold">
                   {e.name}{e.on_break ? " · break" : ""}
                 </div>
