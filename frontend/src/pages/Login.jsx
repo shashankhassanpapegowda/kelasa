@@ -24,12 +24,12 @@ export default function Login() {
         </div>
 
         <div className="max-w-md">
-          <div className="label-overline mb-4" data-testid="login-overline">Welcome to Kelasa</div>
+          <div className="label-overline mb-4" data-testid="login-overline">Employee Management Platform</div>
           <h1 className="text-5xl lg:text-6xl font-semibold tracking-tight leading-[1.05]">
-            <span style={{ fontFamily: "'Hubballi', sans-serif" }}>ಕೆಲಸ</span><br/>Kelasa<span className="text-primary">.</span>
+            Your whole team,<br/>in one place<span className="text-primary">.</span>
           </h1>
           <p className="mt-6 text-muted-foreground text-base leading-relaxed">
-            Bring your whole field team together — attendance, live routes and on-site hours, all in one calm, reliable place. Sign in to pick up right where the day left off.
+            Attendance, field tracking, shifts, reports and more — Kelasa brings your entire workforce into one simple, reliable system. And we're just getting started.
           </p>
 
           <button
@@ -45,9 +45,9 @@ export default function Login() {
 
         <div className="border-t border-border pt-6 space-y-6">
           <div className="grid grid-cols-3 gap-0">
-            <Feature icon={<MapTrifold size={18} weight="bold"/>} label="Live Routes"/>
-            <Feature icon={<ClockClockwise size={18} weight="bold"/>} label="Auto Hours"/>
-            <Feature icon={<ShieldCheck size={18} weight="bold"/>} label="Role Access"/>
+            <Feature icon={<ClockClockwise size={18} weight="bold"/>} label="Attendance"/>
+            <Feature icon={<MapTrifold size={18} weight="bold"/>} label="Field Tracking"/>
+            <Feature icon={<ShieldCheck size={18} weight="bold"/>} label="Roles & Reports"/>
           </div>
           <div className="flex items-center gap-2.5 text-muted-foreground" data-testid="powered-by">
             <img
