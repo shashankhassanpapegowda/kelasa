@@ -12,7 +12,7 @@ const STATUS_STYLE = {
   cancelled: "bg-secondary text-muted-foreground",
 };
 
-export default function LeaveTab({ isAdmin }) {
+export default function LeaveTab({ isAdmin, currentUserId, onDecided }) {
   const [status, setStatus] = useState("pending");
   const [requests, setRequests] = useState([]);
   const [balances, setBalances] = useState({ rows: [], types: [] });
@@ -33,12 +33,18 @@ export default function LeaveTab({ isAdmin }) {
   useEffect(() => { load(); /* eslint-disable-next-line */ }, [status]);
 
   const decide = async (req, decision) => {
-    const note = decision === "rejected" ? (window.prompt(`Reason for rejecting ${req.user_name}'s leave?`) ?? "") : "";
+    let note = "";
+    if (decision === "rejected") {
+      const input = window.prompt(`Reason for rejecting ${req.user_name}'s leave?`);
+      if (input === null) return;
+      note = input;
+    }
     setBusy(req.leave_id);
     try {
       await api.post(`/admin/leave/${req.leave_id}/decide`, { status: decision, note });
       toast.success(`Leave ${decision}`);
       load();
+      onDecided?.();
     } catch (e) { toast.error(e?.response?.data?.detail || "Could not update"); }
     finally { setBusy(null); }
   };
@@ -87,7 +93,7 @@ export default function LeaveTab({ isAdmin }) {
                     </div>
                   )}
                 </div>
-                {r.status === "pending" && (
+                {r.status === "pending" && r.user_id !== currentUserId && (
                   <div className="flex items-center gap-2">
                     <button disabled={busy === r.leave_id} onClick={() => decide(r, "approved")} data-testid={`approve-${r.leave_id}`}
                       className="bg-[#00E676] text-black px-3 py-2 text-xs font-medium inline-flex items-center gap-1.5 hover:brightness-95 disabled:opacity-50">
@@ -98,6 +104,11 @@ export default function LeaveTab({ isAdmin }) {
                       <X size={14} weight="bold"/> Reject
                     </button>
                   </div>
+                )}
+                {r.status === "pending" && r.user_id === currentUserId && (
+                  <span className="text-[10px] label-overline text-muted-foreground" data-testid={`own-request-${r.leave_id}`}>
+                    Your own request · another manager must decide
+                  </span>
                 )}
               </div>
             ))}

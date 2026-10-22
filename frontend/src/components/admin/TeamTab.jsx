@@ -73,12 +73,13 @@ export default function TeamTab({ isAdmin, currentUserId }) {
         {loading && <div className="loading-bar"/>}
         <div className="divide-y divide-border max-h-[640px] overflow-y-auto" data-testid="employees-list">
           {filtered.map(emp => (
-            <div key={emp.user_id} className="p-4 flex items-start gap-3 hover:bg-secondary/40" data-testid={`emp-row-${emp.user_id}`}>
-              <AuthPhoto path={emp.face_photo_path} className="w-10 h-10 rounded-full object-cover border border-border"
-                fallback={emp.picture
-                  ? <img src={emp.picture} className="w-10 h-10 rounded-full border border-border" alt=""/>
-                  : <div className="w-10 h-10 rounded-full bg-secondary grid place-items-center text-sm font-medium">{emp.name?.[0]}</div>}/>
-              <div className="flex-1 min-w-0">
+            <div key={emp.user_id} className="p-4 flex flex-col sm:flex-row sm:items-start gap-3 hover:bg-secondary/40" data-testid={`emp-row-${emp.user_id}`}>
+              <div className="flex items-start gap-3 flex-1 min-w-0">
+                <AuthPhoto path={emp.face_photo_path} className="w-10 h-10 rounded-full object-cover border border-border"
+                  fallback={emp.picture
+                    ? <img src={emp.picture} className="w-10 h-10 rounded-full border border-border" alt=""/>
+                    : <div className="w-10 h-10 rounded-full bg-secondary grid place-items-center text-sm font-medium">{emp.name?.[0]}</div>}/>
+                <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-2 flex-wrap">
                   <span className="text-sm font-medium truncate">{emp.name}</span>
                   {emp.is_on_duty && !emp.on_break && <Tag className="bg-[#00E676] text-black">ON DUTY</Tag>}
@@ -101,9 +102,10 @@ export default function TeamTab({ isAdmin, currentUserId }) {
                   <span>Break {emp.break_max_minutes ?? 60}m</span>
                 </div>
               </div>
-              <div className="text-right shrink-0">
+              </div>
+              <div className="text-left sm:text-right shrink-0 pl-[52px] sm:pl-0">
                 <div className="font-mono text-sm">{fmtDuration(emp.today_minutes)}</div>
-                <div className="flex items-center gap-2 mt-1 justify-end flex-wrap">
+                <div className="flex items-center gap-2 mt-1 sm:justify-end flex-wrap">
                   <button onClick={() => setEditing(emp)} className="text-[10px] label-overline hover:text-primary inline-flex items-center gap-1" data-testid={`edit-emp-${emp.user_id}`}>
                     <PencilSimple size={10} weight="bold"/> EDIT
                   </button>

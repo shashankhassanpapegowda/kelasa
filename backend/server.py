@@ -296,6 +296,12 @@ async def ensure_in_scope(actor: dict, target_user_id: str):
     if ids is not None and target_user_id not in ids:
         raise HTTPException(status_code=403, detail="This employee is not in your team")
 
+async def ensure_manages_other(actor: dict, target_user_id: str):
+    """Scope check that also stops a sub-admin editing their own record."""
+    if actor.get("role") != "admin" and target_user_id == actor["user_id"]:
+        raise HTTPException(status_code=403, detail="Only an admin can change your own settings")
+    await ensure_in_scope(actor, target_user_id)
+
 async def log_activity(actor: dict, action: str, target_name: str = "", details: str = ""):
     await db.activity_log.insert_one({
         "log_id": f"log_{uuid.uuid4().hex[:12]}",
@@ -747,7 +753,7 @@ async def admin_set_role(user_id: str, payload: RoleUpdate, user: dict = Depends
 
 @api_router.patch("/admin/employees/{user_id}/shift")
 async def admin_set_shift(user_id: str, payload: ShiftUpdate, user: dict = Depends(require_manager)):
-    await ensure_in_scope(user, user_id)
+    await ensure_manages_other(user, user_id)
     updates = {}
     if payload.shift_start is not None:
         if payload.shift_start == "":
@@ -991,7 +997,7 @@ async def admin_delete_employee(user_id: str, user: dict = Depends(require_manag
 
 @api_router.patch("/admin/employees/{user_id}/assignment")
 async def admin_set_assignment(user_id: str, payload: AssignmentUpdate, user: dict = Depends(require_manager)):
-    await ensure_in_scope(user, user_id)
+    await ensure_manages_other(user, user_id)
     updates = {k: (v or None) for k, v in payload.model_dump(exclude_unset=True).items()}
     if not updates:
         raise HTTPException(status_code=400, detail="No fields to update")
@@ -1032,7 +1038,7 @@ async def seed_leave_types():
             })
         logger.info("Seeded default leave types")
 
-def count_leave_days(start: str, end: str, half_day: bool) -> float:
+def count_leave_days_raw(start: str, end: str, half_day: bool) -> float:
     try:
         d1 = ddate.fromisoformat(start)
         d2 = ddate.fromisoformat(end)
@@ -1048,6 +1054,20 @@ def count_leave_days(start: str, end: str, half_day: bool) -> float:
             raise HTTPException(status_code=400, detail="Half-day applies to a single date only")
         return 0.5
     return float(n)
+
+async def count_leave_days(start: str, end: str, half_day: bool) -> float:
+    """Calendar days minus any declared company holidays inside the range."""
+    days = count_leave_days_raw(start, end, half_day)
+    if half_day:
+        return days
+    holidays = await db.holidays.count_documents({"date": {"$gte": start, "$lte": end}})
+    net = days - holidays
+    if net <= 0:
+        raise HTTPException(status_code=400, detail="Those dates are already company holidays")
+    return float(net)
+
+def fmt_days(n: float) -> str:
+    return str(int(n)) if float(n).is_integer() else str(n)
 
 async def leave_balances_for(user_id: str, year: int, ltypes=None) -> List[dict]:
     if ltypes is None:
@@ -1095,7 +1115,7 @@ async def create_leave_request(payload: LeaveRequestIn, user: dict = Depends(get
     ltype = await db.leave_types.find_one({"type_id": payload.type_id, "active": True}, {"_id": 0})
     if not ltype:
         raise HTTPException(status_code=400, detail="Invalid leave type")
-    days = count_leave_days(payload.start_date, payload.end_date, payload.half_day)
+    days = await count_leave_days(payload.start_date, payload.end_date, payload.half_day)
     overlap = await db.leave_requests.find_one({
         "user_id": user["user_id"],
         "status": {"$in": ["approved", "pending"]},
@@ -1109,7 +1129,7 @@ async def create_leave_request(payload: LeaveRequestIn, user: dict = Depends(get
         balances = await leave_balances_for(user["user_id"], year)
         bal = next((b for b in balances if b["type_id"] == ltype["type_id"]), None)
         if bal and bal["available"] is not None and days > bal["available"]:
-            raise HTTPException(status_code=400, detail=f"Only {bal['available']} day(s) of {ltype['name']} left")
+            raise HTTPException(status_code=400, detail=f"Only {fmt_days(bal['available'])} day(s) of {ltype['name']} left")
     doc = {
         "leave_id": f"lv_{uuid.uuid4().hex[:12]}",
         "user_id": user["user_id"],
@@ -1138,13 +1158,18 @@ async def cancel_leave_request(leave_id: str, user: dict = Depends(get_current_u
     req = await db.leave_requests.find_one({"leave_id": leave_id}, {"_id": 0})
     if not req:
         raise HTTPException(status_code=404, detail="Request not found")
-    if req["user_id"] != user["user_id"] and user.get("role") not in ("admin", "sub_admin"):
-        raise HTTPException(status_code=403, detail="Not allowed")
+    if req["user_id"] != user["user_id"]:
+        if user.get("role") not in ("admin", "sub_admin"):
+            raise HTTPException(status_code=403, detail="Not allowed")
+        await ensure_in_scope(user, req["user_id"])
     if req["status"] not in ("pending", "approved"):
         raise HTTPException(status_code=400, detail="Already closed")
     await db.leave_requests.update_one({"leave_id": leave_id}, {"$set": {
         "status": "cancelled", "decided_at": now_utc().isoformat(),
     }})
+    if req["user_id"] != user["user_id"]:
+        await log_activity(user, "leave_cancelled", req.get("user_name", req["user_id"]),
+                           f"{req['type_name']} {req['start_date']}→{req['end_date']}")
     return {"ok": True}
 
 @api_router.get("/admin/leave")
@@ -1179,6 +1204,8 @@ async def admin_decide_leave(leave_id: str, payload: LeaveDecision, user: dict =
         raise HTTPException(status_code=404, detail="Request not found")
     if req["status"] != "pending":
         raise HTTPException(status_code=400, detail="This request has already been decided")
+    if req["user_id"] == user["user_id"]:
+        raise HTTPException(status_code=403, detail="You cannot decide on your own leave request")
     await db.leave_requests.update_one({"leave_id": leave_id}, {"$set": {
         "status": payload.status,
         "decided_by": user["user_id"],
@@ -1223,8 +1250,12 @@ async def create_leave_type(payload: LeaveTypeIn, user: dict = Depends(require_a
 async def update_leave_type(type_id: str, payload: LeaveTypeIn, user: dict = Depends(require_admin)):
     if payload.policy not in ("yearly", "monthly", "none"):
         raise HTTPException(status_code=400, detail="policy must be yearly, monthly or none")
+    code = payload.code.strip().upper()
+    clash = await db.leave_types.find_one({"code": code, "active": True, "type_id": {"$ne": type_id}})
+    if clash:
+        raise HTTPException(status_code=400, detail="A leave type with this code already exists")
     res = await db.leave_types.update_one({"type_id": type_id}, {"$set": {
-        "name": payload.name.strip(), "code": payload.code.strip().upper(), "policy": payload.policy,
+        "name": payload.name.strip(), "code": code, "policy": payload.policy,
         "annual_quota": payload.annual_quota, "monthly_accrual": payload.monthly_accrual,
         "paid": payload.paid, "color": payload.color or "#0047FF",
     }})

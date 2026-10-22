@@ -45,7 +45,7 @@ export default function AppHeader() {
             )}
             <div className="leading-tight">
               <div className="text-sm font-medium" data-testid="user-name">{user?.name}</div>
-              <div className="text-[10px] label-overline" data-testid="user-role">{user?.role}</div>
+              <div className="text-[10px] label-overline" data-testid="user-role">{String(user?.role || "").replace("_", "-")}</div>
             </div>
           </div>
           <button

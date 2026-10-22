@@ -29,13 +29,15 @@ export default function AdminPanel() {
   const [tab, setTab] = useState(() => window.location.hash.replace("#", "") || "overview");
   const [pendingLeave, setPendingLeave] = useState(0);
 
-  useEffect(() => { window.location.hash = tab; }, [tab]);
-
-  useEffect(() => {
+  const refreshPending = () => {
     api.get("/admin/leave?status=pending")
       .then(r => setPendingLeave(r.data.pending_count || 0))
       .catch(() => {});
-  }, [tab]);
+  };
+
+  useEffect(() => { window.location.hash = tab; }, [tab]);
+
+  useEffect(() => { refreshPending(); }, [tab]);
 
   const visible = TABS.filter(t => isAdmin || !t.adminOnly);
 
@@ -81,7 +83,7 @@ export default function AdminPanel() {
             {tab === "overview" && <OverviewTab/>}
             {tab === "live" && <LiveTab/>}
             {tab === "team" && <TeamTab isAdmin={isAdmin} currentUserId={user?.user_id}/>}
-            {tab === "leave" && <LeaveTab isAdmin={isAdmin}/>}
+            {tab === "leave" && <LeaveTab isAdmin={isAdmin} currentUserId={user?.user_id} onDecided={refreshPending}/>}
             {tab === "calendar" && <CalendarTab isAdmin={isAdmin}/>}
             {tab === "notices" && <NoticesTab/>}
             {tab === "org" && isAdmin && <OrgTab/>}

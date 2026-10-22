@@ -1,0 +1,48 @@
+{
+  "summary": "Full e2e test of leave management + role-scoped admin/sub-admin console. Backend: 30/30 pytest pass (leave apply/cancel/balance/quota/overlap, approve/reject incl. sub-admin, leave types CRUD, sub-admin scoping + 403s on admin-only endpoints, employee CRUD, org depts/sites/scope, holidays, notices, activity log, analytics, reports CSV scoping). Frontend (Playwright, desktop 1920): admin tabbed console (8 tabs, 7 stat tiles, charts, dept headcount), Team add/edit/remove with persistence after reload, duplicate-email error toast, search + dept filter; employee /leave balance cards CL 12/SL 6/EL 15/LOP ∞, apply, overlap/quota error toasts, cancel; admin Leave approve/reject with prompt note, status filters, balances matrix, leave type add/retire; Org dept/site add/delete + sub-admin coverage chips; holiday add/delete visible on employee /leave; notice post/delete shows on /leave and /dashboard banner; Activity log entries; sub-admin console (Org/Activity hidden, Ravi visible / Anita hidden, headcount 2, role select hidden, shift edit works, no leave-types view, no holiday add); Live Map regression (seeded temp on-duty record) map + markers + LIVE/PAUSED toggle + Route Inspector timeline; /admin/reports loads; employee /admin redirects to /dashboard. Found 1 functional UI bug (pending badge doesn't update), 1 permission gap (self-approval), 1 UX bug (reject prompt Cancel still rejects), and a mobile layout break in the Team rows.",
+  "backend_issues": {
+    "critical": [
+      {"endpoint": "POST /api/admin/leave/{leave_id}/decide", "issue": "No self-approval guard: a sub-admin (or admin) can approve their OWN leave request. Reproduced: sub-admin applied CL 2026-12-14→15 and then approved it themselves, got 200 {ok:true}. Fix: reject with 403 when req.user_id == actor.user_id (or only allow this for full admins).", "priority": "HIGH"}
+    ],
+    "minor": [
+      {"endpoint": "PATCH /api/admin/employees/{id}/shift & /assignment", "issue": "scoped_user_ids() adds the sub-admin themselves to their scope, so a sub-admin can edit their OWN shift/break limit (verified: set own break_max_minutes=120 → 200). They can also change their own department/manager_id through /assignment. Think about excluding self for sub-admins."},
+      {"endpoint": "POST /api/leave/{id}/cancel", "issue": "Any admin or sub_admin can cancel ANY leave request, including approved ones, with no scope check and no activity_log entry."},
+      {"endpoint": "POST /api/leave/request", "issue": "Leave days count calendar days, so weekends and holidays inside the range are deducted from the balance. A request that crosses into the next year is charged entirely to the start year."},
+      {"endpoint": "PATCH /api/admin/leave-types/{id}", "issue": "No check for a duplicate code on update (create does check)."},
+      {"endpoint": "POST /api/leave/request", "issue": "Error text shows a float: 'Only 6.0 day(s) of Sick Leave left'."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "AdminPanel leave pending badge", "issue": "After Approve/Reject in the Leave tab the badge keeps the old count (stayed 3 while the real pending count was 1). AdminPanel only re-fetches /admin/leave?status=pending when the tab changes. Fix: pass an onChange/refreshPending callback into LeaveTab and call it after decide().", "selector": "[data-testid='leave-pending-badge']", "priority": "MEDIUM"},
+      {"component": "LeaveTab reject", "issue": "window.prompt(...) ?? '' means clicking Cancel in the rejection prompt still REJECTS the request with an empty note. Cancel should abort the action.", "selector": "[data-testid^='reject-']", "priority": "MEDIUM"}
+    ],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Admin Team tab on mobile (390px)", "issues": ["The employee row's right-hand action column (shrink-0 + EDIT/24/7/RESET FACE/REMOVE) pushes the name/email/department column to almost zero width, so name and email are invisible and department/shift text wraps one word per line. Stack the actions below the info on small screens (e.g. flex-col sm:flex-row)."]},
+      {"screen": "Header (sub-admin)", "issues": ["Role label shows the raw value 'SUB_ADMIN' with an underscore; use 'SUB-ADMIN' to match the Team tags."]},
+      {"screen": "LeavePage / CalendarTab / Reports", "issues": ["Native <input type='date'> browser pickers are used instead of the shadcn Calendar/DatePicker. They work, but look inconsistent with the rest of the UI."]}
+    ]
+  },
+  "test_report_links": ["/app/backend/tests/test_leave_admin_console.py", "/app/test_reports/pytest/pytest_iter5.xml"],
+  "action_items": [
+    "Block self-approval in POST /api/admin/leave/{id}/decide (return 403 when the request belongs to the actor).",
+    "Refresh the leave-pending-badge after approve/reject (callback from LeaveTab into AdminPanel).",
+    "In LeaveTab.decide, abort the rejection when window.prompt returns null.",
+    "Fix the mobile layout of TeamTab rows (stack the action buttons under the info on small screens).",
+    "Optional: exclude sub-admins from editing their own shift/assignment; scope-check and log leave cancellations made by managers; skip weekends/holidays when counting leave days; show the role label as SUB-ADMIN in the header."
+  ],
+  "critical_code_review_comments": [
+    "server.py is 1528 lines. Split it into routers (auth, attendance, admin/employees, leave, org, holidays, announcements, analytics, reports).",
+    "admin_decide_leave has no scope or self check. The user asked that any manager can approve anyone, but self-approval should still be blocked.",
+    "get_current_user prefers the cookie over the Authorization header. That is fine, but worth knowing: a test that sends a Bearer token from a browser session that also holds a cookie authenticates as the cookie user.",
+    "leave_balances_for runs one query per employee in /admin/leave/balances (N+1). Acceptable for now; aggregate once the headcount grows."
+  ],
+  "updated_files": ["/app/backend/tests/test_leave_admin_console.py"],
+  "success_rate": {"backend": "100% (30/30)", "frontend": "~92% (all flows functional; badge refresh + reject-cancel bugs; mobile Team layout issue)"},
+  "test_credentials": "From /app/memory/test_credentials.md: admin test_session_admin_001, sub_admin test_session_subadmin_001, employee test_session_emp_001 (session expiry refreshed +7d at the start of testing).",
+  "seed_data_creation": "Temporary on-duty attendance (rec_TEST_live01) + 2 location pings for Ravi to test the Live Map, removed afterwards. All TEST_ employees, leave requests, holidays, notices, depts/sites and leave types were cleaned up. Ravi's and the sub-admin's break limits were reset to 60, and the sub-admin's coverage was restored to ['Field Operations']. Activity log entries from testing remain.",
+  "retest_needed": true,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Run pytest /app/backend/tests/test_leave_admin_console.py (30 tests, all pass). To retest: (1) the badge decrements right after approve/reject without switching tabs; (2) cancelling the reject prompt leaves the request pending; (3) sub-admin self-approval returns 403; (4) the Team tab at 390px shows names. The Live Map needs an on-duty attendance record to render the map: insert attendance {check_out:null, record_id} + locations with the same record_id. Do not use page.request with a Bearer header while the admin cookie is set, because the cookie wins."
+}
