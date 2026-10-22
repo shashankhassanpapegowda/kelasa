@@ -106,16 +106,18 @@ export default function TeamTab({ isAdmin, currentUserId }) {
               <div className="text-left sm:text-right shrink-0 pl-[52px] sm:pl-0">
                 <div className="font-mono text-sm">{fmtDuration(emp.today_minutes)}</div>
                 <div className="flex items-center gap-2 mt-1 sm:justify-end flex-wrap">
-                  <button onClick={() => setEditing(emp)} className="text-[10px] label-overline hover:text-primary inline-flex items-center gap-1" data-testid={`edit-emp-${emp.user_id}`}>
-                    <PencilSimple size={10} weight="bold"/> EDIT
-                  </button>
+                  {(isAdmin || emp.user_id !== currentUserId) && (
+                    <button onClick={() => setEditing(emp)} className="text-[10px] label-overline hover:text-primary inline-flex items-center gap-1" data-testid={`edit-emp-${emp.user_id}`}>
+                      <PencilSimple size={10} weight="bold"/> EDIT
+                    </button>
+                  )}
                   {isAdmin && (
                     <button onClick={() => act(() => api.patch(`/admin/employees/${emp.user_id}/tracking_mode`, { tracking_mode: emp.tracking_mode === "always_on" ? "duty_only" : "always_on" }), "Tracking mode updated")}
                       className="text-[10px] label-overline hover:text-primary" data-testid={`toggle-tracking-${emp.user_id}`}>
                       {emp.tracking_mode === "always_on" ? "→ DUTY ONLY" : "→ 24/7"}
                     </button>
                   )}
-                  {emp.face_enrolled && (
+                  {emp.face_enrolled && (isAdmin || emp.user_id !== currentUserId) && (
                     <button onClick={() => { if (window.confirm(`Reset face enrollment for ${emp.name}?`)) act(() => api.delete(`/admin/employees/${emp.user_id}/face`), "Face enrollment reset"); }}
                       className="text-[10px] label-overline hover:text-[#FF3B30]" data-testid={`reset-face-${emp.user_id}`}>
                       RESET FACE

@@ -144,7 +144,12 @@ export default function LeavePage() {
                         {fmtDay(r.start_date)} → {fmtDay(r.end_date)} <span className="text-muted-foreground">· {r.days}d</span>
                       </div>
                       {r.reason && <div className="text-xs text-muted-foreground italic mt-1">“{r.reason}”</div>}
-                      {r.decided_by_name && (
+                      {r.status === "cancelled" && r.cancelled_by_name && (
+                        <div className="text-[10px] font-mono text-muted-foreground mt-1">
+                          cancelled by {r.cancelled_by_name}
+                        </div>
+                      )}
+                      {r.status !== "cancelled" && r.decided_by_name && (
                         <div className="text-[10px] font-mono text-muted-foreground mt-1">
                           {r.status} by {r.decided_by_name}{r.decision_note ? ` · ${r.decision_note}` : ""}
                         </div>

@@ -873,7 +873,7 @@ async def admin_attendance(date: Optional[str] = None, user: dict = Depends(requ
 
 @api_router.delete("/admin/employees/{user_id}/face")
 async def admin_reset_face(user_id: str, user: dict = Depends(require_manager)):
-    await ensure_in_scope(user, user_id)
+    await ensure_manages_other(user, user_id)
     res = await db.users.update_one(
         {"user_id": user_id},
         {"$set": {"face_enrolled": False, "face_descriptor": None, "face_photo_path": None}}
@@ -1165,7 +1165,10 @@ async def cancel_leave_request(leave_id: str, user: dict = Depends(get_current_u
     if req["status"] not in ("pending", "approved"):
         raise HTTPException(status_code=400, detail="Already closed")
     await db.leave_requests.update_one({"leave_id": leave_id}, {"$set": {
-        "status": "cancelled", "decided_at": now_utc().isoformat(),
+        "status": "cancelled",
+        "cancelled_by": user["user_id"],
+        "cancelled_by_name": user.get("name"),
+        "decided_at": now_utc().isoformat(),
     }})
     if req["user_id"] != user["user_id"]:
         await log_activity(user, "leave_cancelled", req.get("user_name", req["user_id"]),
@@ -1192,7 +1195,7 @@ async def admin_leave_list(
         r["picture"] = e.get("picture")
         r["department"] = e.get("department")
         r["site"] = e.get("site")
-    pending = sum(1 for r in reqs if r["status"] == "pending")
+    pending = sum(1 for r in reqs if r["status"] == "pending" and r["user_id"] != user["user_id"])
     return {"requests": reqs, "pending_count": pending}
 
 @api_router.post("/admin/leave/{leave_id}/decide")
@@ -1206,6 +1209,7 @@ async def admin_decide_leave(leave_id: str, payload: LeaveDecision, user: dict =
         raise HTTPException(status_code=400, detail="This request has already been decided")
     if req["user_id"] == user["user_id"]:
         raise HTTPException(status_code=403, detail="You cannot decide on your own leave request")
+    # NOTE: deliberate product choice — any admin or sub-admin can decide anyone's leave.
     await db.leave_requests.update_one({"leave_id": leave_id}, {"$set": {
         "status": payload.status,
         "decided_by": user["user_id"],
