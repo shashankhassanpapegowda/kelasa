@@ -8,7 +8,7 @@ import { toast } from "sonner";
 import { useAuth } from "@/lib/auth";
 import { useNavigate } from "react-router-dom";
 import { getAccuratePosition, startLiveWatch } from "@/lib/geo";
-import { Camera, Clock, Path as PathIcon, MapPin, ArrowsClockwise, GpsFix, WarningCircle, Coffee, ArrowCounterClockwise } from "@phosphor-icons/react";
+import { Camera, Clock, Path as PathIcon, MapPin, ArrowsClockwise, GpsFix, WarningCircle, Coffee, ArrowCounterClockwise, Megaphone, PushPin } from "@phosphor-icons/react";
 
 const PING_INTERVAL_MS = 30_000;
 
@@ -44,6 +44,7 @@ export default function Dashboard() {
   const [faceMode, setFaceMode] = useState("in");
   const [pendingGeo, setPendingGeo] = useState(null);
   const [livePos, setLivePos] = useState(null);
+  const [notice, setNotice] = useState(null);
   const pingTimer = useRef(null);
   const tickTimer = useRef(null);
   const liveStopRef = useRef(null);
@@ -66,6 +67,12 @@ export default function Dashboard() {
   };
 
   useEffect(() => { refresh(); }, []);
+
+  useEffect(() => {
+    api.get("/announcements?limit=1")
+      .then(r => setNotice((r.data.announcements || [])[0] || null))
+      .catch(() => {});
+  }, []);
 
   // Elapsed clock + live watcher when active
   useEffect(() => {
@@ -197,6 +204,17 @@ export default function Dashboard() {
           </div>
 
           {/* Status card */}
+          {notice && (
+            <div className="mt-6 border border-border bg-card p-4 flex items-start gap-3" data-testid="dashboard-notice">
+              {notice.pinned ? <PushPin size={16} weight="fill" className="text-primary mt-0.5 shrink-0"/> : <Megaphone size={16} weight="bold" className="text-primary mt-0.5 shrink-0"/>}
+              <div className="min-w-0">
+                <div className="text-sm font-medium">{notice.title}</div>
+                {notice.body && <p className="text-sm text-muted-foreground mt-0.5 line-clamp-2">{notice.body}</p>}
+                <div className="text-[10px] font-mono text-muted-foreground mt-1">{notice.author_name}</div>
+              </div>
+            </div>
+          )}
+
           <div className="mt-6 grid lg:grid-cols-3 gap-0 border border-border bg-card">
             <div className="lg:col-span-2 p-6 sm:p-8 border-b lg:border-b-0 lg:border-r border-border">
               <div className="flex items-center gap-3 flex-wrap">

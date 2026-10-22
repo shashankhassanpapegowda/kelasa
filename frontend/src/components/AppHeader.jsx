@@ -1,17 +1,17 @@
 import { useAuth } from "@/lib/auth";
 import { Link, useLocation, useNavigate } from "react-router-dom";
-import { SignOut, Gauge, MapTrifold, ChartBar } from "@phosphor-icons/react";
+import { SignOut, Gauge, MapTrifold, ChartBar, AirplaneTilt } from "@phosphor-icons/react";
 
 export default function AppHeader() {
   const { user, logout } = useAuth();
   const loc = useLocation();
   const navigate = useNavigate();
-  const isAdmin = user?.role === "admin";
+  const isManager = user?.role === "admin" || user?.role === "sub_admin";
 
   return (
     <header className="bg-card border-b border-border sticky top-0 z-30">
       <div className="px-4 sm:px-6 h-16 flex items-center justify-between">
-        <Link to={isAdmin ? "/admin" : "/dashboard"} className="flex items-center gap-3" data-testid="brand-link">
+        <Link to={isManager ? "/admin" : "/dashboard"} className="flex items-center gap-3" data-testid="brand-link">
           <img
             src="https://customer-assets.emergentagent.com/job_employee-locator-4/artifacts/5n0qsrf7_GTG%20LOGO%20BLACK.png"
             alt="Gyarahalli Thammayya Groups"
@@ -24,16 +24,14 @@ export default function AppHeader() {
         </Link>
 
         <nav className="flex items-center gap-1">
-          {isAdmin && (
+          {isManager && (
             <>
               <NavLink to="/admin" current={loc.pathname.startsWith("/admin") && loc.pathname !== "/admin/reports"} icon={<Gauge size={16} weight="bold"/>} label="Console" testid="nav-admin"/>
               <NavLink to="/admin/reports" current={loc.pathname === "/admin/reports"} icon={<ChartBar size={16} weight="bold"/>} label="Reports" testid="nav-reports"/>
-              <NavLink to="/dashboard" current={loc.pathname === "/dashboard"} icon={<MapTrifold size={16} weight="bold"/>} label="My Day" testid="nav-my-day"/>
             </>
           )}
-          {!isAdmin && (
-            <NavLink to="/dashboard" current={loc.pathname === "/dashboard"} icon={<MapTrifold size={16} weight="bold"/>} label="My Day" testid="nav-my-day"/>
-          )}
+          <NavLink to="/dashboard" current={loc.pathname === "/dashboard"} icon={<MapTrifold size={16} weight="bold"/>} label="My Day" testid="nav-my-day"/>
+          <NavLink to="/leave" current={loc.pathname === "/leave"} icon={<AirplaneTilt size={16} weight="bold"/>} label="Leave" testid="nav-leave"/>
         </nav>
 
         <div className="flex items-center gap-3">

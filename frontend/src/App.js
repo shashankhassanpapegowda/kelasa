@@ -8,8 +8,11 @@ import Dashboard from "@/pages/Dashboard";
 import AdminPanel from "@/pages/AdminPanel";
 import FaceEnroll from "@/pages/FaceEnroll";
 import Reports from "@/pages/Reports";
+import LeavePage from "@/pages/LeavePage";
 
-function ProtectedRoute({ children, adminOnly = false, skipFaceCheck = false }) {
+const isManager = (user) => user?.role === "admin" || user?.role === "sub_admin";
+
+function ProtectedRoute({ children, managerOnly = false, skipFaceCheck = false }) {
   const { user, loading } = useAuth();
   if (loading) {
     return (
@@ -23,7 +26,7 @@ function ProtectedRoute({ children, adminOnly = false, skipFaceCheck = false }) 
   }
   if (!user) return <Navigate to="/" replace/>;
   if (!skipFaceCheck && !user.face_enrolled) return <Navigate to="/enroll" replace/>;
-  if (adminOnly && user.role !== "admin") return <Navigate to="/dashboard" replace/>;
+  if (managerOnly && !isManager(user)) return <Navigate to="/dashboard" replace/>;
   return children;
 }
 
@@ -32,7 +35,7 @@ function RootRedirect() {
   if (loading) return null;
   if (user) {
     if (!user.face_enrolled) return <Navigate to="/enroll" replace/>;
-    return <Navigate to={user.role === "admin" ? "/admin" : "/dashboard"} replace/>;
+    return <Navigate to={isManager(user) ? "/admin" : "/dashboard"} replace/>;
   }
   return <Login/>;
 }
@@ -45,8 +48,9 @@ function AppRouter() {
       <Route path="/" element={<RootRedirect/>}/>
       <Route path="/enroll" element={<ProtectedRoute skipFaceCheck><FaceEnroll/></ProtectedRoute>}/>
       <Route path="/dashboard" element={<ProtectedRoute><Dashboard/></ProtectedRoute>}/>
-      <Route path="/admin" element={<ProtectedRoute adminOnly><AdminPanel/></ProtectedRoute>}/>
-      <Route path="/admin/reports" element={<ProtectedRoute adminOnly><Reports/></ProtectedRoute>}/>
+      <Route path="/leave" element={<ProtectedRoute><LeavePage/></ProtectedRoute>}/>
+      <Route path="/admin" element={<ProtectedRoute managerOnly><AdminPanel/></ProtectedRoute>}/>
+      <Route path="/admin/reports" element={<ProtectedRoute managerOnly><Reports/></ProtectedRoute>}/>
       <Route path="*" element={<Navigate to="/" replace/>}/>
     </Routes>
   );
