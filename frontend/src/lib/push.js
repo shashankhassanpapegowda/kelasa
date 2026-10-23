@@ -24,11 +24,10 @@ export async function enablePush() {
   if (permission !== "granted") throw new Error("Notifications are blocked. Allow them in your browser settings.");
   const reg = await navigator.serviceWorker.register("/sw.js", { scope: "/" });
   await navigator.serviceWorker.ready;
-  let sub = await reg.pushManager.getSubscription();
-  if (!sub) {
-    const { data } = await api.get("/push/public-key");
-    sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: toBytes(data.public_key) });
-  }
+  const old = await reg.pushManager.getSubscription();
+  if (old) await old.unsubscribe();
+  const { data } = await api.get("/push/public-key");
+  const sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: toBytes(data.public_key) });
   await api.post("/push/subscribe", sub.toJSON());
   return sub;
 }

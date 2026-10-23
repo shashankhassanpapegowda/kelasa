@@ -348,13 +348,14 @@ async def track_zone(user: dict, record: dict, lat: float, lng: float, accuracy:
             })
         await db.geofence_alerts.update_one({"alert_id": open_alert["alert_id"]}, {"$set": updates})
     elif not inside:
+        alert_id = f"gfa_{uuid.uuid4().hex[:12]}"
         spawn_push(user["user_id"], {
             "title": f"{user.get('name')} left the branch area",
             "body": f"{int(gap)} m outside {nearest['name']}",
-            "tag": f"gfa_{record['record_id']}", "url": "/admin#live",
+            "tag": alert_id, "url": "/admin#live",
         })
         await db.geofence_alerts.insert_one({
-            "alert_id": f"gfa_{uuid.uuid4().hex[:12]}",
+            "alert_id": alert_id,
             "user_id": user["user_id"], "name": user.get("name"), "record_id": record["record_id"],
             "date": record["date"], "lat": lat, "lng": lng, "accuracy": accuracy,
             "distance_m": int(gap), "nearest_branch": nearest["name"],

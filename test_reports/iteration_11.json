@@ -1,0 +1,34 @@
+{
+  "summary": "Tested Phone Alert Push (Web Push), backend and frontend. Backend: new test_web_push.py has 6 tests and all 6 pass. Regression suites also pass: alert history/escalation and geofence alerts (30/30), geofence branches (21/21). Covered: /push/public-key (admin and sub-admin 200, employee 403, no login 401). /push/subscribe: http endpoint gives 400, missing keys gives 422, employee 403, no login 401, subscribing twice to the same endpoint keeps one record. /push/status returns devices and this_device. DELETE removes only your own subscription (the sub-admin could not delete the admin's). /push/test returns 400 'No device is subscribed yet' when there are none; with a fake FCM endpoint it returns sent=0, devices=1 and deletes the dead subscription. Trigger chain, using fake subscriptions for the admin, the in-scope sub-admin and a TEST out-of-scope sub-admin (Administration): (1) a field-staff ping outside sent no push and made no alert; (2) the first leave pushed to the admin and the in-scope sub-admin (backend log shows 'Push failed (410)' and both subscriptions were deleted), not to the out-of-scope sub-admin (its subscription is still there); (3) another ping in the same interval did not push again; (4) after backdating the alert by 31 min, the next ping pushed again and set pushed_level=1; (5) another ping at the same level did not push. Frontend: /sw.js is served as application/javascript and /kelasa-icon-192.png returns 200 image/png. On the Alerts tab, phone-alerts-card is first, above escalation-setting. Headless Chromium reports 'denied': the card shows OFF, the 'Notifications are blocked…' text and no button. With mocked Notification and PushManager: OFF state shows the right text and 'Turn on for this phone'. Clicking it shows the toast 'Phone alerts turned on', then ON, '1 device', Send test and Turn off, and the server reports this_device=true. Turn off shows the toast 'Phone alerts turned off', the server reports 0 devices, and the card goes back to OFF. Send test with a dead endpoint makes the server delete the subscription, and the card goes back to OFF. Sub-admin on mobile (390px) sees the card but not the escalation setting, and the layout is fine.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "track_zone push payloads", "issue": "The first-leave push uses tag gfa_<record_id> and url /admin#live. The repeat push uses tag <alert_id> and url /admin#alerts. Because the tags differ, a repeat notification does not replace the first one on the phone; the phone keeps both. Use one tag for the whole alert if one notification that updates in place is wanted."},
+      {"endpoint": "POST /api/push/subscribe", "issue": "The upsert is matched by endpoint and replaces user_id. Any manager who knows an endpoint can take that subscription over. The risk is low because endpoints are secret, and it suits a shared device switching accounts. This is noted only."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [
+      {"flow": "Re-enable after a dead subscription", "issue": "When the push service returns 410, the server deletes the subscription and the card shows OFF. The browser still has its old local PushSubscription, so enablePush() reuses it (it only subscribes when there is no subscription) and posts the same dead endpoint again. To recover, enablePush should unsubscribe and subscribe again when the server does not know the endpoint (status this_device=false), or after a test send with sent=0.", "affected_selectors": ["phone-alerts-enable", "phone-alerts-test"]}
+    ],
+    "design_issues": [
+      {"screen": "Alerts tab / PhoneAlertsCard", "issues": ["'Checking this device…' stayed for about 9s on one headless run. The environment was slow at that moment (an /auth/me call took 33s once), so this is probably not the app's fault. There is no timeout fallback if serviceWorker.getRegistration hangs."]}
+    ]
+  },
+  "test_report_links": ["/app/backend/tests/test_web_push.py", "/app/test_reports/pytest/pytest_iter11.xml"],
+  "action_items": [
+    "Optional: in enablePush, unsubscribe the stale local subscription and subscribe again when the server does not have this endpoint, so 'Turn on' works after a 410.",
+    "Optional: use one notification tag for the first leave and its repeats, so the repeat replaces the earlier notification."
+  ],
+  "critical_code_review_comments": [
+    "push_to_managers_of loads every subscription and runs scoped_user_ids for each sub-admin on every alert. This is fine now; cache it or index by user if the number of subscribers grows.",
+    "server.py is about 2440 lines; split it into routers (push, geofence, reports)."
+  ],
+  "updated_files": ["/app/backend/tests/test_web_push.py"],
+  "success_rate": {"backend": "100% (6/6 new + 51/51 regression)", "frontend": "100%"},
+  "seed_data_creation": "Temporary TEST_user_oos_sub sub-admin and its session, plus fake push_subscriptions (endpoints containing 'fakeTEST'). All were removed. Final state checked: push_subscriptions=0, Ravi checked out, field_staff=false, no open alerts, escalate_minutes=30.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Headless Chromium reports Notification.permission='denied', and grant_permissions has no effect in this tool. For the OFF/ON states, use page.evaluate to override Notification.permission (defineProperty getter), Notification.requestPermission, and PushManager.prototype.getSubscription/subscribe with a fake subscription. Then click tab-overview and tab-alerts so the card mounts again. Admin tab test IDs are tab-<id>. Fake keys come from cryptography P-256 X962 uncompressed point + 16 random bytes, base64url. FCM returns 410 for these, and the subscription is then deleted."
+}

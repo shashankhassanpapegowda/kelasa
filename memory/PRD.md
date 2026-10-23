@@ -108,3 +108,10 @@ Employee attendance and route-tracking app, now expanding into a full **employee
 - Alert history: console "Alerts" tab (admin + sub-admin, scoped) and Reports "Left Area" view (uses applied range); day-by-day blocks with left/returned/away/near/repeats/acknowledged; CSV `/api/admin/geofence-alerts/history.csv`. Screen times use the profile timezone, same as the CSV.
 - Known: days are grouped by attendance (check-in) date, so overnight-shift exits count under the shift's start day.
 - Tested: iteration_10 (30/30 backend, frontend 100%) + post-fix regression 30/30.
+
+## 2026-06 — Phone alert push (Web Push)
+- VAPID keys in backend/.env (VAPID_PUBLIC_KEY / VAPID_PRIVATE_KEY / VAPID_SUBJECT) — don't regenerate, it breaks existing subscriptions. pywebpush.
+- `/api/push/public-key|status|subscribe|test` (managers only). `push_subscriptions` collection, one record per device; dead endpoints (404/410) are removed automatically.
+- track_zone sends a push on the first leave and on each repeat interval (pushed_level), while the employee's phone keeps sending location. Recipients: all admins plus sub-admins whose scope includes the employee. One notification per alert (tag = alert_id).
+- frontend/public/sw.js (push + click opens /admin#live or #alerts), lib/push.js, PhoneAlertsCard on Alerts tab (iPhone: Add to Home Screen first).
+- Tested: iteration_11 (backend 6/6 + 51 regression, frontend 100% with mocked push). Real-phone delivery is not testable in headless.
