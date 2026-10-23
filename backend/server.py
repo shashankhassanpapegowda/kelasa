@@ -24,6 +24,9 @@ from pydantic import BaseModel, Field, ConfigDict
 from typing import List, Optional
 from datetime import datetime, timezone, timedelta, time as dtime, date as ddate
 from zoneinfo import ZoneInfo
+import json
+import asyncio
+from pywebpush import webpush, WebPushException
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
@@ -195,6 +198,14 @@ class BranchUpdate(BaseModel):
     radius_m: Optional[int] = None
     clear_geofence: bool = False
 
+class PushKeys(BaseModel):
+    p256dh: str
+    auth: str
+
+class PushSubscriptionIn(BaseModel):
+    endpoint: str
+    keys: PushKeys
+
 class GeofenceSettings(BaseModel):
     escalate_minutes: int
 
@@ -324,10 +335,24 @@ async def track_zone(user: dict, record: dict, lat: float, lng: float, accuracy:
     if inside and open_alert:
         await resolve_alerts({"alert_id": open_alert["alert_id"]}, now_iso, f"back inside {inside}")
     elif not inside and open_alert:
-        await db.geofence_alerts.update_one({"alert_id": open_alert["alert_id"]}, {"$set": {
-            "lat": lat, "lng": lng, "distance_m": int(gap), "nearest_branch": nearest["name"], "last_seen_at": now_iso,
-        }})
+        updates = {"lat": lat, "lng": lng, "distance_m": int(gap), "nearest_branch": nearest["name"], "last_seen_at": now_iso}
+        every = await escalate_minutes()
+        minutes = int((now_utc() - parse_iso(open_alert["created_at"])).total_seconds() // 60)
+        level = minutes // every
+        if level > (open_alert.get("pushed_level") or 0):
+            updates["pushed_level"] = level
+            spawn_push(user["user_id"], {
+                "title": f"{user.get('name')} still outside · {minutes} min",
+                "body": f"{int(gap)} m outside {nearest['name']}",
+                "tag": open_alert["alert_id"], "url": "/admin#alerts",
+            })
+        await db.geofence_alerts.update_one({"alert_id": open_alert["alert_id"]}, {"$set": updates})
     elif not inside:
+        spawn_push(user["user_id"], {
+            "title": f"{user.get('name')} left the branch area",
+            "body": f"{int(gap)} m outside {nearest['name']}",
+            "tag": f"gfa_{record['record_id']}", "url": "/admin#live",
+        })
         await db.geofence_alerts.insert_one({
             "alert_id": f"gfa_{uuid.uuid4().hex[:12]}",
             "user_id": user["user_id"], "name": user.get("name"), "record_id": record["record_id"],
@@ -336,6 +361,59 @@ async def track_zone(user: dict, record: dict, lat: float, lng: float, accuracy:
             "created_at": now_iso, "last_seen_at": now_iso, "resolved_at": None,
             "acknowledged_by": None, "acknowledged_at": None,
         })
+
+# ---------- Web push ----------
+VAPID_PUBLIC_KEY = os.environ["VAPID_PUBLIC_KEY"]
+VAPID_PRIVATE_KEY = os.environ["VAPID_PRIVATE_KEY"]
+VAPID_SUBJECT = os.environ["VAPID_SUBJECT"]
+_push_tasks: set = set()
+
+def _send_webpush(sub: dict, body: str):
+    webpush(
+        subscription_info={"endpoint": sub["endpoint"], "keys": sub["keys"]},
+        data=body, vapid_private_key=VAPID_PRIVATE_KEY,
+        vapid_claims={"sub": VAPID_SUBJECT}, ttl=600,
+    )
+
+async def push_to_subscriptions(subs: List[dict], payload: dict) -> int:
+    body = json.dumps(payload, separators=(",", ":"))
+    sent, dead = 0, []
+    for sub in subs:
+        try:
+            await asyncio.to_thread(_send_webpush, sub, body)
+            sent += 1
+        except WebPushException as exc:
+            code = getattr(exc.response, "status_code", None)
+            if code in (404, 410):
+                dead.append(sub["endpoint"])
+            logger.warning(f"Push failed ({code}) for {sub.get('user_id')}")
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(f"Push error: {exc}")
+    if dead:
+        await db.push_subscriptions.delete_many({"endpoint": {"$in": dead}})
+    return sent
+
+async def push_to_managers_of(employee_id: str, payload: dict):
+    subs = await db.push_subscriptions.find({}, {"_id": 0}).to_list(2000)
+    if not subs:
+        return
+    managers = await db.users.find(
+        {"user_id": {"$in": list({x["user_id"] for x in subs})}, "role": {"$in": ["admin", "sub_admin"]}}, {"_id": 0}
+    ).to_list(500)
+    allowed = set()
+    for m in managers:
+        if m["role"] == "admin":
+            allowed.add(m["user_id"])
+        else:
+            ids = await scoped_user_ids(m)
+            if ids is None or employee_id in ids:
+                allowed.add(m["user_id"])
+    await push_to_subscriptions([x for x in subs if x["user_id"] in allowed], payload)
+
+def spawn_push(employee_id: str, payload: dict):
+    task = asyncio.create_task(push_to_managers_of(employee_id, payload))
+    _push_tasks.add(task)
+    task.add_done_callback(_push_tasks.discard)
 
 def euclidean(a: List[float], b: List[float]) -> float:
     if len(a) != len(b):
@@ -2103,6 +2181,45 @@ async def admin_reports_csv(
         media_type="text/csv",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'}
     )
+
+# ---------- Push subscription endpoints ----------
+@api_router.get("/push/public-key")
+async def push_public_key(user: dict = Depends(require_manager)):
+    return {"public_key": VAPID_PUBLIC_KEY}
+
+@api_router.get("/push/status")
+async def push_status(endpoint: Optional[str] = None, user: dict = Depends(require_manager)):
+    devices = await db.push_subscriptions.count_documents({"user_id": user["user_id"]})
+    this_device = bool(endpoint) and bool(await db.push_subscriptions.find_one({"endpoint": endpoint, "user_id": user["user_id"]}))
+    return {"devices": devices, "this_device": this_device}
+
+@api_router.post("/push/subscribe")
+async def push_subscribe(payload: PushSubscriptionIn, request: Request, user: dict = Depends(require_manager)):
+    if not payload.endpoint.startswith("https://"):
+        raise HTTPException(status_code=400, detail="Invalid push endpoint")
+    now_iso = now_utc().isoformat()
+    await db.push_subscriptions.update_one({"endpoint": payload.endpoint}, {
+        "$set": {"endpoint": payload.endpoint, "keys": payload.keys.model_dump(), "user_id": user["user_id"],
+                 "user_agent": request.headers.get("user-agent", "")[:200], "updated_at": now_iso},
+        "$setOnInsert": {"created_at": now_iso},
+    }, upsert=True)
+    return {"ok": True}
+
+@api_router.delete("/push/subscribe")
+async def push_unsubscribe(endpoint: str, user: dict = Depends(require_manager)):
+    await db.push_subscriptions.delete_one({"endpoint": endpoint, "user_id": user["user_id"]})
+    return {"ok": True}
+
+@api_router.post("/push/test")
+async def push_test(user: dict = Depends(require_manager)):
+    subs = await db.push_subscriptions.find({"user_id": user["user_id"]}, {"_id": 0}).to_list(50)
+    if not subs:
+        raise HTTPException(status_code=400, detail="No device is subscribed yet")
+    sent = await push_to_subscriptions(subs, {
+        "title": "Kelasa alerts are on", "body": "You'll get a notification when someone leaves a branch area.",
+        "tag": "kelasa-test", "url": "/admin#alerts",
+    })
+    return {"ok": True, "sent": sent, "devices": len(subs)}
 
 # ---------- Geofence alerts ----------
 DEFAULT_ESCALATE_MINUTES = 30

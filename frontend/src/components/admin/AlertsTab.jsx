@@ -3,6 +3,7 @@ import { api } from "@/lib/api";
 import { toast } from "sonner";
 import { useAuth } from "@/lib/auth";
 import AlertHistory from "@/components/AlertHistory";
+import PhoneAlertsCard from "@/components/admin/PhoneAlertsCard";
 import { BellRinging } from "@phosphor-icons/react";
 
 const today = () => new Date().toLocaleDateString("en-CA");
@@ -15,6 +16,7 @@ export default function AlertsTab() {
 
   return (
     <div className="space-y-6" data-testid="alerts-tab">
+      <PhoneAlertsCard/>
       {user?.role === "admin" && <EscalationSetting/>}
       <div className="flex items-end gap-3 flex-wrap">
         <div>
