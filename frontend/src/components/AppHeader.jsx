@@ -43,7 +43,7 @@ export default function AppHeader() {
           )}
           <NavLink to="/dashboard" current={loc.pathname === "/dashboard"} icon={<MapTrifold size={16} weight="bold"/>} label="My Day" testid="nav-my-day"/>
           <NavLink to="/leave" current={loc.pathname === "/leave"} icon={<AirplaneTilt size={16} weight="bold"/>} label="Leave" testid="nav-leave"/>
-          <NavLink to="/wishes" current={loc.pathname === "/wishes"} icon={<span className="relative"><HandHeart size={16} weight="bold"/>{unread > 0 && <span className="absolute -top-1.5 -right-2 min-w-[14px] h-[14px] px-0.5 rounded-full bg-[#FF3B30] text-white text-[9px] font-mono grid place-items-center" data-testid="wishes-unread-badge">{unread}</span>}</span>} label="Wishes" testid="nav-wishes"/>
+          <NavLink to="/wishes" current={loc.pathname === "/wishes"} icon={<span className="relative mr-1.5"><HandHeart size={16} weight="bold"/>{unread > 0 && <span className="absolute -top-1.5 -right-2 min-w-[14px] h-[14px] px-0.5 rounded-full bg-[#FF3B30] text-white text-[9px] font-mono grid place-items-center" data-testid="wishes-unread-badge">{unread}</span>}</span>} label="Wishes" testid="nav-wishes"/>
           <NavLink to="/profile" current={loc.pathname === "/profile"} icon={<UserCircle size={16} weight="bold"/>} label="Profile" testid="nav-profile"/>
         </nav>
 

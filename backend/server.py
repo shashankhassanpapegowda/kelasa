@@ -24,7 +24,7 @@ from html.parser import HTMLParser
 from urllib.parse import urlparse
 from pathlib import Path
 from pydantic import BaseModel, Field, ConfigDict
-from typing import List, Optional
+from typing import List, Literal, Optional
 from datetime import datetime, timezone, timedelta, time as dtime, date as ddate
 from zoneinfo import ZoneInfo
 import json
@@ -218,7 +218,7 @@ class PushDeviceSettings(BaseModel):
 
 class WishIn(BaseModel):
     to_user_id: str
-    kind: str
+    kind: Literal["birthday", "wedding_anniversary", "work_anniversary"]
     message: str
 
 class WishReply(BaseModel):
@@ -2912,7 +2912,8 @@ async def run_morning_celebrations(day_key: str):
         others = [c for c in items if c["user_id"] != uid]
         if mine:
             first = (mine[0]["name"] or "").split(" ")[0]
-            title = f"Happy birthday, {first}!" if mine[0]["kind"] == "birthday" else f"Happy {KIND_LABEL[mine[0]['kind']]}, {first}!"
+            occasions = " & ".join(KIND_LABEL[c["kind"]] for c in mine)
+            title = f"Happy {occasions}, {first}!"
             body = "Wishing you a wonderful day from all of us." + (f" Also today: {_names(others)}." if others else "")
         else:
             title = "Celebrations today"

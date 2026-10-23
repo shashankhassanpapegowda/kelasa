@@ -156,16 +156,17 @@ function StatutorySection({ p, onSaved }) {
   return (
     <Section icon={IdentificationCard} title="EPF & ESI" testid="profile-statutory-section">
       <div className="grid sm:grid-cols-2 gap-3">
-        <Field label="EPF UAN" hint="12 digits"><input inputMode="numeric" maxLength={14} className={`${inputCls} font-mono`} {...s.bind("uan")} placeholder="100123456789" data-testid="profile-uan"/></Field>
+        <Field label="EPF UAN" hint="12 digits"><input inputMode="numeric" maxLength={14} className={`${inputCls} font-mono`} {...s.bind("uan")} placeholder="12-digit UAN" data-testid="profile-uan"/></Field>
         <Field label="ESI Number" hint={p.esi_not_applicable ? "Marked not applicable" : "10 or 17 digits"}>
           <input inputMode="numeric" maxLength={19} disabled={!!p.esi_not_applicable} className={`${inputCls} font-mono disabled:opacity-40`} {...s.bind("esi")}
-            placeholder={p.esi_not_applicable ? "Not applicable" : "3112345678"} data-testid="profile-esi"/>
+            placeholder={p.esi_not_applicable ? "Not applicable" : "10 or 17 digits"} data-testid="profile-esi"/>
         </Field>
       </div>
       <label className="flex items-center gap-2 text-sm cursor-pointer" data-testid="profile-esi-na">
         <input type="checkbox" checked={!!p.esi_not_applicable} data-testid="profile-esi-na-checkbox" className="accent-[#0047FF]"
           onChange={async (e) => {
-            try { const { data } = await api.put("/profile/me", { esi_not_applicable: e.target.checked }); onSaved(data); toast.success(e.target.checked ? "ESI marked not applicable" : "ESI required again"); }
+            const on = e.target.checked;
+            try { const { data } = await api.put("/profile/me", { esi_not_applicable: on }); onSaved(data); toast.success(on ? "ESI marked not applicable" : "ESI required again"); }
             catch (err) { toast.error(err?.response?.data?.detail || "Could not save"); }
           }}/>
         ESI is not applicable to me

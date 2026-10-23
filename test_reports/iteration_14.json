@@ -1,0 +1,49 @@
+{
+  "summary": "Tested the 4 new features end-to-end: morning celebrations cron, profile completion nudge + ESI not applicable, payroll details CSV export, and private wishes (send/list/read/reply/privacy). Backend: 19 new pytest cases plus 29 regression cases for profile/bank, 48/48 passing. An in-process probe confirmed the cron push text: the celebrant gets 'Happy birthday, Ravi!', others get 'Celebrations today' with the names, and celebrations=false devices are skipped. Frontend: Anita sent a birthday wish from the CelebrationsCard (WISH -> dialog -> chip -> send -> WISHED link -> /wishes?open=). Ravi saw the badge (1), '2 WISHES' and 'You' on his upcoming anniversary; opening the thread cleared the dot and the badge; reply worked. Nudge checked on My Day (33%) and /profile (compact, no link). The ESI N/A checkbox disables the input (33% -> 67%). A pending bank change counts as half with 'waiting approval' (17% -> 50%). Payroll Details downloads: admin got everyone, sub-admin only Ravi, 'Change pending approval' and 'Not applicable' are correct. Found one bug (inverted ESI toast) and fixed it.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "run_morning_celebrations", "issue": "A celebrant with 2 occasions today (Ravi: birthday + work anniversary) gets only 'Happy birthday, Ravi!'. His own second occasion is never mentioned because the body only lists other people."},
+      {"endpoint": "POST /api/wishes", "issue": "kind is a free str, not a Literal/enum. An invalid kind still gets a 400 'no celebration', but Pydantic validation would give a clearer error."},
+      {"endpoint": "GET /api/admin/reports/payroll-details.csv", "issue": "For a main admin the export also lists admin/sub-admin accounts (5 rows incl. Shashank, Test Admin). Confirm this is intended for payroll."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "ProfilePage ESI not-applicable checkbox", "issue": "Success toast was inverted ('ESI required again' when marking N/A). It read e.target.checked after await on a controlled checkbox. FIXED: the value is now captured before the await. Verified the toast now says 'ESI marked not applicable'.", "selector": "[data-testid='profile-esi-na-checkbox']", "priority": "LOW"}
+    ],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Profile EPF & ESI", "issues": ["The UAN placeholder '100123456789' looks like a real stored UAN when the field is empty. Use a clearly fake hint such as '12-digit UAN'."]},
+      {"screen": "Header nav", "issues": ["The red wishes-unread-badge sits on the edge of the 'WISHES' label text and slightly overlaps it."]},
+      {"screen": "Profile Special Dates / Reports date range", "issues": ["Uses native browser date inputs instead of the shadcn Calendar (existing before this change)."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter14_celebrations_wishes_payroll.py",
+    "/app/backend/tests/probe_iter14_cron_messages.py",
+    "/app/test_reports/pytest/pytest_iter14.xml"
+  ],
+  "action_items": [
+    "Optional: in the celebrant's morning push, mention their other own occasions too (e.g. 'Happy birthday & 4-yr work anniversary, Ravi!')",
+    "Optional: make WishIn.kind a Literal['birthday','wedding_anniversary','work_anniversary']",
+    "Optional: change the misleading UAN placeholder; nudge the wishes badge so it does not overlap the label",
+    "Optional: delay URL.revokeObjectURL in Reports.downloadPayroll (setTimeout) for Safari robustness"
+  ],
+  "critical_code_review_comments": [
+    "The phone-pref-celebrations switch only renders when this device is subscribed (state 'on'), so it cannot be exercised in headless Playwright. Code shows it is included for both the employee and admin switch lists. The backend PATCH /push/subscribe {celebrations:false} and /push/status were verified.",
+    "The cron is idempotent via a unique cron_runs.key, returns 2xx immediately and runs the work in the background. Correct.",
+    "server.py is ~3000 lines. Consider splitting the wishes, cron and payroll sections into routers."
+  ],
+  "updated_files": [
+    "/app/frontend/src/pages/ProfilePage.jsx",
+    "/app/backend/tests/test_iter14_celebrations_wishes_payroll.py",
+    "/app/backend/tests/probe_iter14_cron_messages.py"
+  ],
+  "success_rate": {"backend": "100%", "frontend": "100% (1 minor toast bug fixed)"},
+  "seed_data_creation": "Temporary: session TEST_session_anita_ui/TEST_session_anita_iter14 for Anita, her wishes, bank request and ESI flag. All cleaned up. Ravi restored (uan 100123456789, esi_not_applicable true). The cron_runs doc celebrations-2026-10-23 was re-created by the tests and probe (status done; sent=2 comes from fake in-process subscriptions, not real pushes). Admin wish_45f86dc310d1 untouched.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Export REACT_APP_BACKEND_URL before running pytest. The iter14 test file deletes db.cron_runs celebrations-* to re-run the cron. It needs Ravi to have a birthday and work anniversary today plus a wedding anniversary within 7 days, and Anita to have no profile dates. The public ingress was intermittently slow (10-20s, and even /api/ root timed out while localhost answered in ms), so use 40s waits in Playwright. Creating files under /app/backend/tests triggers a backend hot-reload.",
+  "rca of the issue": "ESI toast inverted: in the onChange of a controlled checkbox, e.target.checked was read after `await api.put` and after onSaved(data) re-rendered the component. By then the value no longer reflected the user's click. Fix: `const on = e.target.checked;` before the await."
+}

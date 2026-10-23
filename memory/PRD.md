@@ -135,3 +135,10 @@ Employee attendance and route-tracking app, now expanding into a full **employee
 - `/api/celebrations`: today plus the next 7 days — birthdays, wedding and work anniversaries (years ≥ 1); birth year never shown. Celebrations card appears on My Day and the Console Overview.
 - /api/files now limits face/check-in photos to their owner or a manager in scope; avatars are visible to all signed-in users. AuthPhoto caches blob URLs.
 - Tested: iteration_13 (29/29 backend, frontend flows pass) and every reported issue fixed.
+
+## 2026-06 — Morning celebrations push, profile nudge, payroll export, private wishes
+- Cron `.emergent/crons.yml` morning-celebrations runs at 08:00 Asia/Kolkata → POST /api/cron/celebrations (Bearer WEBHOOK_CRON_SECRET in backend/.env, at most one send per IST day via `cron_runs.key`). Celebrants get "Happy <occasions>, <first>!"; everyone else gets "Celebrations today: …". Per-device `celebrations` switch.
+- ProfileNudge (bank/UAN/ESI; ESI "not applicable" option; a pending bank change counts as half) on My Day (below the check-in card) and the Profile page.
+- `GET /api/admin/reports/payroll-details.csv` (admin = everyone incl. admin accounts; sub-admin = their team). Button in Reports.
+- Private wishes: `wishes` collection, one conversation per sender + celebrant + occasion; a wish can be sent from 3 days before to 7 days after the occasion (relative to today); replies; unread badge on the "Wishes" nav item; push to the other person. Wish buttons on the celebrations card; /wishes page.
+- Tested: iteration_14 (backend 100%, frontend 100%) + fixes (multi-occasion greeting, kind Literal, placeholders, badge spacing).
