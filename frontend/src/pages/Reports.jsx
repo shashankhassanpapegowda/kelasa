@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import AppHeader from "@/components/AppHeader";
 import { api, API } from "@/lib/api";
 import { toast } from "sonner";
+import BranchReport from "@/components/BranchReport";
 import { Download, Calendar, ChartBar, WarningCircle, Clock as ClockIcon, Coffee } from "@phosphor-icons/react";
 
 const todayStr = () => new Date().toISOString().slice(0, 10);
@@ -22,12 +23,18 @@ export default function Reports() {
   const [to, setTo] = useState(todayStr());
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(false);
+  const [view, setView] = useState("employees");
+  const [branchData, setBranchData] = useState({ punches: [], zone_alerts: 0 });
 
   const load = async () => {
     setLoading(true);
     try {
-      const res = await api.get(`/admin/reports?from=${from}&to=${to}`);
+      const [res, b] = await Promise.all([
+        api.get(`/admin/reports?from=${from}&to=${to}`),
+        api.get(`/admin/reports/branches?from=${from}&to=${to}`),
+      ]);
       setRows(res.data.rows || []);
+      setBranchData(b.data);
     } catch (e) {
       toast.error(e?.response?.data?.detail || "Failed to load report");
     } finally { setLoading(false); }
@@ -45,12 +52,14 @@ export default function Reports() {
   }), { present: 0, absent: 0, late: 0, work: 0, breakM: 0, overBreak: 0 });
 
   const downloadCsv = async () => {
+    const byBranch = view === "branches";
     try {
-      const res = await api.get(`/admin/reports.csv?from=${from}&to=${to}`, { responseType: "blob" });
+      const path = byBranch ? "/admin/reports/punches.csv" : "/admin/reports.csv";
+      const res = await api.get(`${path}?from=${from}&to=${to}`, { responseType: "blob" });
       const url = URL.createObjectURL(res.data);
       const a = document.createElement("a");
       a.href = url;
-      a.download = `attendance_report_${from}_to_${to}.csv`;
+      a.download = `${byBranch ? "branch_punches" : "attendance_report"}_${from}_to_${to}.csv`;
       document.body.appendChild(a);
       a.click();
       a.remove();
@@ -83,11 +92,21 @@ export default function Reports() {
               </label>
               <button onClick={load} className="border border-border bg-card px-3 py-1.5 text-sm hover:bg-secondary" data-testid="apply-range">Apply</button>
               <button onClick={downloadCsv} className="bg-foreground text-background px-3 py-1.5 text-sm inline-flex items-center gap-2 hover:bg-primary" data-testid="download-csv">
-                <Download size={14} weight="bold"/> CSV
+                <Download size={14} weight="bold"/> {view === "branches" ? "Punch Log CSV" : "CSV"}
               </button>
             </div>
           </div>
 
+          <div className="mt-6 inline-flex border border-border bg-card" data-testid="report-view-toggle">
+            {[["employees", "By Employee"], ["branches", "By Branch"]].map(([id, label]) => (
+              <button key={id} onClick={() => setView(id)} data-testid={`report-view-${id}`}
+                className={`px-4 py-2 text-xs uppercase tracking-[0.15em] transition-colors ${view === id ? "bg-foreground text-background" : "hover:bg-secondary"}`}>{label}</button>
+            ))}
+          </div>
+
+          {view === "branches" && <BranchReport punches={branchData.punches || []} zoneAlerts={branchData.zone_alerts || 0}/>}
+
+          {view === "employees" && <>
           {/* Totals strip */}
           <div className="mt-6 grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-0 border border-border bg-card">
             <Tot label="Present Days" value={totals.present} testid="total-present"/>
@@ -107,6 +126,7 @@ export default function Reports() {
                 <tr>
                   <th className="text-left p-3">Employee</th>
                   <th className="text-left p-3">Shift</th>
+                  <th className="text-left p-3">Punched At</th>
                   <th className="text-right p-3">Present</th>
                   <th className="text-right p-3">Absent</th>
                   <th className="text-right p-3">Late Days</th>
@@ -127,6 +147,7 @@ export default function Reports() {
                       {r.shift_start ? `${r.shift_start}${r.shift_end ? ` – ${r.shift_end}` : ""}` : <span className="text-yellow-700">—</span>}
                       <div className="text-[10px] text-muted-foreground">brk {r.break_max_minutes}m</div>
                     </td>
+                    <td className="p-3 text-xs max-w-[220px]">{r.punch_branches || "—"}</td>
                     <td className="p-3 font-mono text-right">{r.present_days}</td>
                     <td className={`p-3 font-mono text-right ${r.absent_days > 0 ? "text-[#FF3B30]" : ""}`}>{r.absent_days}</td>
                     <td className={`p-3 font-mono text-right ${r.late_days > 0 ? "text-[#FF3B30]" : ""}`}>{r.late_days}</td>
@@ -137,11 +158,12 @@ export default function Reports() {
                   </tr>
                 ))}
                 {rows.length === 0 && !loading && (
-                  <tr><td colSpan={9} className="p-8 text-center text-muted-foreground">No data for this date range.</td></tr>
+                  <tr><td colSpan={10} className="p-8 text-center text-muted-foreground">No data for this date range.</td></tr>
                 )}
               </tbody>
             </table>
           </div>
+          </>}
 
           <p className="mt-4 text-xs text-muted-foreground flex items-start gap-1.5 max-w-2xl">
             <WarningCircle size={14} weight="bold" className="mt-0.5 shrink-0"/>

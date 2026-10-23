@@ -9,6 +9,7 @@ import CalendarTab from "@/components/admin/CalendarTab";
 import NoticesTab from "@/components/admin/NoticesTab";
 import ActivityTab from "@/components/admin/ActivityTab";
 import BranchesTab from "@/components/admin/BranchesTab";
+import GeofenceAlerts from "@/components/admin/GeofenceAlerts";
 import { api } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { Gauge, Broadcast, Users, AirplaneTilt, CalendarBlank, Megaphone, Buildings, ClockCounterClockwise, MapPinArea } from "@phosphor-icons/react";
@@ -68,6 +69,8 @@ export default function AdminPanel() {
               )}
             </div>
           </div>
+
+          <GeofenceAlerts onShowMap={() => setTab("live")}/>
 
           <div className="mt-6 flex items-center gap-1 overflow-x-auto border-b border-border pb-px" data-testid="admin-tabs">
             {visible.map(t => {

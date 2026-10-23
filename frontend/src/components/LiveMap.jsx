@@ -71,7 +71,7 @@ export default function LiveMap({ employees = [], branches = [], height = "100%"
 
         {/* Worker markers */}
         {withLoc.map((e) => {
-          const status = e.on_break ? "#F5A524" : "#00E676";
+          const status = e.outside_zone ? "#FF3B30" : e.on_break ? "#F5A524" : "#00E676";
           return (
             <CircleMarker
               key={e.user_id}
@@ -81,7 +81,7 @@ export default function LiveMap({ employees = [], branches = [], height = "100%"
             >
               <Tooltip direction="top" offset={[0, -10]} opacity={1} className="kelasa-map-label">
                 <div className="font-mono text-[10px] font-semibold">
-                  {e.name}{e.on_break ? " · break" : ""}
+                  {e.name}{e.outside_zone ? " · outside area" : e.on_break ? " · break" : ""}
                 </div>
               </Tooltip>
             </CircleMarker>

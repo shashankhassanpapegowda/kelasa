@@ -287,19 +287,52 @@ async def enforce_geofence(user: dict, lat: float, lng: float, accuracy: Optiona
     branches = await geofenced_branches()
     if not branches:
         return None
-    slack = min(accuracy or 0, GEOFENCE_ACCURACY_TOLERANCE_M)
-    nearest, nearest_gap = None, None
-    for b in branches:
-        d = haversine_m(lat, lng, b["lat"], b["lng"])
-        if d <= b["radius_m"] + slack:
-            return b["name"]
-        gap = d - b["radius_m"]
-        if nearest_gap is None or gap < nearest_gap:
-            nearest, nearest_gap = b, gap
+    inside, nearest, nearest_gap = nearest_branch(branches, lat, lng, accuracy)
+    if inside:
+        return inside
     raise HTTPException(status_code=403, detail=(
         f"You are {int(nearest_gap)} m outside {nearest['name']}. "
         f"Move inside a branch area to punch {action}."
     ))
+
+def nearest_branch(branches: List[dict], lat: float, lng: float, accuracy: Optional[float]):
+    """(inside_name, nearest_branch, gap_m) — inside_name is None when outside every circle."""
+    slack = min(accuracy or 0, GEOFENCE_ACCURACY_TOLERANCE_M)
+    nearest, nearest_gap = None, None
+    for b in branches:
+        gap = haversine_m(lat, lng, b["lat"], b["lng"]) - b["radius_m"]
+        if gap <= slack:
+            return b["name"], b, gap
+        if nearest_gap is None or gap < nearest_gap:
+            nearest, nearest_gap = b, gap
+    return None, nearest, nearest_gap
+
+async def track_zone(user: dict, record: dict, lat: float, lng: float, accuracy: Optional[float]):
+    if user.get("field_staff"):
+        return
+    branches = await geofenced_branches()
+    if not branches:
+        return
+    inside, nearest, gap = nearest_branch(branches, lat, lng, accuracy)
+    open_alert = await db.geofence_alerts.find_one({"record_id": record["record_id"], "resolved_at": None}, {"_id": 0})
+    now_iso = now_utc().isoformat()
+    if inside and open_alert:
+        await db.geofence_alerts.update_one({"alert_id": open_alert["alert_id"]}, {"$set": {
+            "resolved_at": now_iso, "resolved_reason": f"back inside {inside}",
+        }})
+    elif not inside and open_alert:
+        await db.geofence_alerts.update_one({"alert_id": open_alert["alert_id"]}, {"$set": {
+            "lat": lat, "lng": lng, "distance_m": int(gap), "nearest_branch": nearest["name"], "last_seen_at": now_iso,
+        }})
+    elif not inside:
+        await db.geofence_alerts.insert_one({
+            "alert_id": f"gfa_{uuid.uuid4().hex[:12]}",
+            "user_id": user["user_id"], "name": user.get("name"), "record_id": record["record_id"],
+            "date": record["date"], "lat": lat, "lng": lng, "accuracy": accuracy,
+            "distance_m": int(gap), "nearest_branch": nearest["name"],
+            "created_at": now_iso, "last_seen_at": now_iso, "resolved_at": None,
+            "acknowledged_by": None, "acknowledged_at": None,
+        })
 
 def euclidean(a: List[float], b: List[float]) -> float:
     if len(a) != len(b):
@@ -934,6 +967,9 @@ async def check_out(payload: CheckRequest, user: dict = Depends(get_current_user
         "accuracy": payload.accuracy,
         "timestamp": out_dt.isoformat(),
     })
+    await db.geofence_alerts.update_many({"record_id": active["record_id"], "resolved_at": None}, {"$set": {
+        "resolved_at": out_dt.isoformat(), "resolved_reason": "checked out",
+    }})
     return {"ok": True, "duration_minutes": total_minutes, "net_work_minutes": net_minutes, "over_break": over_break}
 
 # ---------- Breaks ----------
@@ -1058,6 +1094,7 @@ async def location_ping(payload: LocationPing, user: dict = Depends(get_current_
         "accuracy": payload.accuracy,
         "timestamp": now_utc().isoformat(),
     })
+    await track_zone(user, active, payload.lat, payload.lng, payload.accuracy)
     return {"ok": True}
 
 @api_router.get("/location/today")
@@ -1204,6 +1241,11 @@ async def admin_live(user: dict = Depends(require_manager)):
     """All currently on-duty employees with their latest known location."""
     ids = await scoped_user_ids(user)
     actives = await db.attendance.find({"check_out": None, **user_filter(ids)}, {"_id": 0}).to_list(1000)
+    open_alert_records = {
+        x["record_id"] for x in await db.geofence_alerts.find(
+            {"resolved_at": None, "record_id": {"$in": [a["record_id"] for a in actives]}}, {"_id": 0, "record_id": 1}
+        ).to_list(1000)
+    }
     result = []
     for a in actives:
         emp = await db.users.find_one(
@@ -1236,6 +1278,7 @@ async def admin_live(user: dict = Depends(require_manager)):
             "accuracy": latest.get("accuracy") if latest else None,
             "last_ping": latest.get("timestamp") if latest else None,
             "trail": trail,
+            "outside_zone": a["record_id"] in open_alert_records,
         })
     return {"employees": result, "server_time": now_utc().isoformat()}
 
@@ -1973,7 +2016,12 @@ async def build_report(from_date: str, to_date: str, user_ids=None) -> List[dict
         total_work = sum((r.get("net_work_minutes") or 0) for r in recs)
         total_break = sum((r.get("total_break_minutes") or 0) for r in recs)
         over_break_days = sum(1 for r in recs if r.get("over_break"))
+        punch_counts = {}
+        for r in recs:
+            key = r.get("check_in_branch") or "Outside / no zone"
+            punch_counts[key] = punch_counts.get(key, 0) + 1
         rows.append({
+            "punch_branches": ", ".join(f"{k} ({v})" for k, v in sorted(punch_counts.items(), key=lambda x: -x[1])),
             "user_id": u["user_id"],
             "name": u.get("name", ""),
             "email": u.get("email", ""),
@@ -2033,7 +2081,7 @@ async def admin_reports_csv(
     buf = io.StringIO()
     writer = csv.writer(buf)
     writer.writerow([
-        "Employee", "Email", "Department", "Site", "Shift Start", "Shift End", "Break Limit (min)",
+        "Employee", "Email", "Department", "Home Branch", "Punched At", "Shift Start", "Shift End", "Break Limit (min)",
         "Present Days", "Leave Days", "Holidays", "Absent Days", "Late Days", "Total Late (min)",
         "Total Work (h:m)", "Total Break (min)", "Over-Break Days", "Sessions",
     ])
@@ -2041,7 +2089,7 @@ async def admin_reports_csv(
         hours = (r["total_work_minutes"] or 0) // 60
         mins = (r["total_work_minutes"] or 0) % 60
         writer.writerow([
-            r["name"], r["email"], r.get("department") or "", r.get("site") or "",
+            r["name"], r["email"], r.get("department") or "", r.get("site") or "", r.get("punch_branches") or "",
             r["shift_start"] or "", r["shift_end"] or "",
             r["break_max_minutes"], r["present_days"], r["leave_days"], r["holiday_days"], r["absent_days"],
             r["late_days"], r["total_late_minutes"],
@@ -2054,6 +2102,114 @@ async def admin_reports_csv(
         media_type="text/csv",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'}
     )
+
+# ---------- Geofence alerts ----------
+@api_router.get("/admin/geofence-alerts")
+async def admin_geofence_alerts(user: dict = Depends(require_manager)):
+    uf = user_filter(await scoped_user_ids(user))
+    active = await db.geofence_alerts.find({"resolved_at": None, **uf}, {"_id": 0}).sort("created_at", -1).to_list(200)
+    since = (now_utc() - timedelta(hours=24)).isoformat()
+    recent = await db.geofence_alerts.find(
+        {"resolved_at": {"$ne": None}, "created_at": {"$gte": since}, **uf}, {"_id": 0}
+    ).sort("created_at", -1).to_list(50)
+    return {"active": active, "recent": recent}
+
+@api_router.post("/admin/geofence-alerts/{alert_id}/ack")
+async def admin_ack_geofence_alert(alert_id: str, user: dict = Depends(require_manager)):
+    alert = await db.geofence_alerts.find_one({"alert_id": alert_id}, {"_id": 0})
+    if not alert:
+        raise HTTPException(status_code=404, detail="Alert not found")
+    await ensure_in_scope(user, alert["user_id"])
+    await db.geofence_alerts.update_one({"alert_id": alert_id}, {"$set": {
+        "acknowledged_by": user.get("name"), "acknowledged_at": now_utc().isoformat(),
+    }})
+    return {"ok": True}
+
+# ---------- Branch punch report ----------
+async def build_punch_log(from_date: str, to_date: str, user_ids=None) -> List[dict]:
+    uf = user_filter(user_ids)
+    records = await db.attendance.find(
+        {"date": {"$gte": from_date, "$lte": to_date}, **uf}, {"_id": 0}
+    ).sort("check_in", 1).to_list(20000)
+    users = await db.users.find(
+        {"user_id": {"$in": list({r["user_id"] for r in records})}},
+        {"_id": 0, "user_id": 1, "name": 1, "email": 1, "site": 1, "department": 1, "timezone": 1, "field_staff": 1},
+    ).to_list(5000)
+    umap = {u["user_id"]: u for u in users}
+    fmt = lambda iso, tz: to_local(iso, tz).strftime("%H:%M") if iso else None  # noqa: E731
+    out = []
+    for r in records:
+        u = umap.get(r["user_id"], {})
+        tz = u.get("timezone") or DEFAULT_TZ
+        out.append({
+            "record_id": r["record_id"], "user_id": r["user_id"],
+            "name": u.get("name", ""), "email": u.get("email", ""),
+            "home_branch": u.get("site"), "department": u.get("department"),
+            "field_staff": bool(u.get("field_staff")), "date": r["date"],
+            "check_in": fmt(r.get("check_in"), tz), "check_in_branch": r.get("check_in_branch"),
+            "check_out": fmt(r.get("check_out"), tz), "check_out_branch": r.get("check_out_branch"),
+            "net_work_minutes": r.get("net_work_minutes"), "late_by_minutes": r.get("late_by_minutes"),
+        })
+    return out
+
+@api_router.get("/admin/reports/branches")
+async def admin_branch_report(
+    from_date: str = Query(..., alias="from"),
+    to_date: str = Query(..., alias="to"),
+    user: dict = Depends(require_manager),
+):
+    log = await build_punch_log(from_date, to_date, await scoped_user_ids(user))
+    alerts = await db.geofence_alerts.count_documents(
+        {"date": {"$gte": from_date, "$lte": to_date}, **user_filter(await scoped_user_ids(user))}
+    )
+    return {"from": from_date, "to": to_date, "punches": log, "zone_alerts": alerts}
+
+async def manager_from_request(request: Request, auth: Optional[str]) -> dict:
+    token = request.cookies.get("session_token") or auth
+    if not token:
+        auth_header = request.headers.get("Authorization", "")
+        if auth_header.startswith("Bearer "):
+            token = auth_header[7:]
+    if not token:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    session = await db.user_sessions.find_one({"session_token": token}, {"_id": 0})
+    if not session:
+        raise HTTPException(status_code=401, detail="Invalid session")
+    u = await db.users.find_one({"user_id": session["user_id"]}, {"_id": 0})
+    if not u or u.get("role") not in ("admin", "sub_admin"):
+        raise HTTPException(status_code=403, detail="Admin only")
+    return u
+
+def csv_response(header: List[str], rows: List[list], filename: str) -> StreamingResponse:
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(header)
+    writer.writerows(rows)
+    return StreamingResponse(
+        iter([buf.getvalue()]), media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+@api_router.get("/admin/reports/punches.csv")
+async def admin_punches_csv(
+    request: Request,
+    from_date: str = Query(..., alias="from"),
+    to_date: str = Query(..., alias="to"),
+    auth: Optional[str] = Query(None),
+):
+    u = await manager_from_request(request, auth)
+    log = await build_punch_log(from_date, to_date, await scoped_user_ids(u))
+    rows = [[
+        p["date"], p["name"], p["email"], p["home_branch"] or "", p["department"] or "",
+        "Yes" if p["field_staff"] else "No",
+        p["check_in"] or "", p["check_in_branch"] or "Outside / no zone",
+        p["check_out"] or "", (p["check_out_branch"] or "Outside / no zone") if p["check_out"] else "",
+        p["net_work_minutes"] if p["net_work_minutes"] is not None else "", p["late_by_minutes"] or 0,
+    ] for p in log]
+    return csv_response([
+        "Date", "Employee", "Email", "Home Branch", "Department", "Field Staff",
+        "Punch In", "Punch In Branch", "Punch Out", "Punch Out Branch", "Net Work (min)", "Late (min)",
+    ], rows, f"branch_punches_{from_date}_to_{to_date}.csv")
 
 @api_router.get("/")
 async def root():

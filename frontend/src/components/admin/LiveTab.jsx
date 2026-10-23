@@ -81,6 +81,7 @@ export default function LiveTab() {
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2">
                       <span className="text-sm font-medium truncate">{e.name}</span>
+                      {e.outside_zone && <span className="text-[9px] font-mono uppercase tracking-wider bg-[#FF3B30] text-white px-1.5 py-0.5" data-testid={`live-outside-${e.user_id}`}>OUTSIDE</span>}
                       {e.on_break
                         ? <span className="text-[9px] font-mono uppercase tracking-wider bg-yellow-400 text-black px-1.5 py-0.5">BREAK</span>
                         : <span className="text-[9px] font-mono uppercase tracking-wider bg-[#00E676] text-black px-1.5 py-0.5">DUTY</span>}
