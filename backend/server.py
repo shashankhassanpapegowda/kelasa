@@ -171,6 +171,8 @@ class EmployeeCreate(BaseModel):
     break_max_minutes: Optional[int] = 60
 
 class AssignmentUpdate(BaseModel):
+    name: Optional[str] = None
+    email: Optional[str] = None
     department: Optional[str] = None
     site: Optional[str] = None
     manager_id: Optional[str] = None
@@ -184,6 +186,17 @@ class ScopeUpdate(BaseModel):
 
 class OrgUnitIn(BaseModel):
     name: str
+
+class BranchUpdate(BaseModel):
+    name: Optional[str] = None
+    address: Optional[str] = None
+    lat: Optional[float] = None
+    lng: Optional[float] = None
+    radius_m: Optional[int] = None
+    clear_geofence: bool = False
+
+class FieldStaffUpdate(BaseModel):
+    field_staff: bool
 
 class LeaveTypeIn(BaseModel):
     name: str
@@ -254,6 +267,39 @@ def compute_late_minutes(check_in_iso: str, user: dict) -> Optional[int]:
     diff = (local_in - shift_dt).total_seconds() / 60.0
     minutes = int(diff)
     return max(minutes - LATE_GRACE_MINUTES, 0)
+
+def haversine_m(lat1: float, lng1: float, lat2: float, lng2: float) -> float:
+    r = 6371000.0
+    p1, p2 = math.radians(lat1), math.radians(lat2)
+    dp, dl = math.radians(lat2 - lat1), math.radians(lng2 - lng1)
+    a = math.sin(dp / 2) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(dl / 2) ** 2
+    return 2 * r * math.asin(math.sqrt(a))
+
+GEOFENCE_ACCURACY_TOLERANCE_M = 50
+
+async def geofenced_branches() -> List[dict]:
+    return await db.sites.find({"lat": {"$ne": None}, "lng": {"$ne": None}, "radius_m": {"$gt": 0}}, {"_id": 0}).to_list(500)
+
+async def enforce_geofence(user: dict, lat: float, lng: float, accuracy: Optional[float], action: str) -> Optional[str]:
+    """Returns the matched branch name, or raises 403 when outside every branch circle."""
+    if user.get("field_staff"):
+        return None
+    branches = await geofenced_branches()
+    if not branches:
+        return None
+    slack = min(accuracy or 0, GEOFENCE_ACCURACY_TOLERANCE_M)
+    nearest, nearest_gap = None, None
+    for b in branches:
+        d = haversine_m(lat, lng, b["lat"], b["lng"])
+        if d <= b["radius_m"] + slack:
+            return b["name"]
+        gap = d - b["radius_m"]
+        if nearest_gap is None or gap < nearest_gap:
+            nearest, nearest_gap = b, gap
+    raise HTTPException(status_code=403, detail=(
+        f"You are {int(nearest_gap)} m outside {nearest['name']}. "
+        f"Move inside a branch area to punch {action}."
+    ))
 
 def euclidean(a: List[float], b: List[float]) -> float:
     if len(a) != len(b):
@@ -791,6 +837,7 @@ async def check_in(payload: CheckRequest, user: dict = Depends(get_current_user)
     )
     if active:
         raise HTTPException(status_code=400, detail="Already checked in")
+    branch = await enforce_geofence(user, payload.lat, payload.lng, payload.accuracy, "in")
 
     today = user_local_today(user)
     check_in_iso = now_utc().isoformat()
@@ -807,6 +854,7 @@ async def check_in(payload: CheckRequest, user: dict = Depends(get_current_user)
         "check_in_accuracy": payload.accuracy,
         "check_in_photo_path": photo_path,
         "check_in_face_distance": round(dist, 4),
+        "check_in_branch": branch,
         "check_out": None,
         "status": "on_duty",
         "breaks": [],
@@ -846,6 +894,7 @@ async def check_out(payload: CheckRequest, user: dict = Depends(get_current_user
         raise HTTPException(status_code=400, detail="No active check-in")
     if active.get("on_break"):
         raise HTTPException(status_code=400, detail="You are currently on break. End break before checking out.")
+    branch = await enforce_geofence(user, payload.lat, payload.lng, payload.accuracy, "out")
 
     photo_path = upload_face_image(user["user_id"], payload.image_b64, "checkout")
     check_in_dt = datetime.fromisoformat(active["check_in"])
@@ -868,6 +917,7 @@ async def check_out(payload: CheckRequest, user: dict = Depends(get_current_user
             "check_out_accuracy": payload.accuracy,
             "check_out_photo_path": photo_path,
             "check_out_face_distance": round(dist, 4),
+            "check_out_branch": branch,
             "status": "off_duty",
             "duration_minutes": total_minutes,
             "net_work_minutes": net_minutes,
@@ -955,6 +1005,15 @@ async def break_end(payload: BreakRequest, user: dict = Depends(get_current_user
         {"$set": {"breaks": breaks, "on_break": False, "total_break_minutes": total}}
     )
     return {"ok": True, "duration_minutes": mins, "total_break_minutes": total}
+
+@api_router.get("/attendance/geofence")
+async def my_geofence(user: dict = Depends(get_current_user)):
+    branches = await geofenced_branches()
+    return {
+        "field_staff": bool(user.get("field_staff")),
+        "tolerance_m": GEOFENCE_ACCURACY_TOLERANCE_M,
+        "branches": [{k: b.get(k) for k in ("unit_id", "name", "address", "lat", "lng", "radius_m")} for b in branches],
+    }
 
 @api_router.get("/attendance/today")
 async def attendance_today(user: dict = Depends(get_current_user)):
@@ -1069,6 +1128,7 @@ async def admin_employees(user: dict = Depends(require_manager)):
         u.setdefault("tracking_mode", "duty_only")
         u.setdefault("department", None)
         u.setdefault("site", None)
+        u.setdefault("field_staff", False)
         u.setdefault("manager_id", None)
         u.setdefault("designation", None)
         u.setdefault("phone", None)
@@ -1260,11 +1320,48 @@ async def add_site(payload: OrgUnitIn, user: dict = Depends(require_admin)):
     if not name:
         raise HTTPException(status_code=400, detail="Name required")
     if await db.sites.find_one({"name": name}):
-        raise HTTPException(status_code=400, detail="Site already exists")
+        raise HTTPException(status_code=400, detail="Branch already exists")
     doc = {"unit_id": f"site_{uuid.uuid4().hex[:10]}", "name": name, "created_at": now_utc().isoformat()}
     await db.sites.insert_one(doc)
     await log_activity(user, "site_added", name)
     return {"ok": True, "site": {k: v for k, v in doc.items() if k != "_id"}}
+
+@api_router.patch("/admin/org/sites/{unit_id}")
+async def update_site(unit_id: str, payload: BranchUpdate, user: dict = Depends(require_admin)):
+    doc = await db.sites.find_one({"unit_id": unit_id}, {"_id": 0})
+    if not doc:
+        raise HTTPException(status_code=404, detail="Branch not found")
+    updates = {}
+    if payload.name is not None:
+        name = payload.name.strip()
+        if not name:
+            raise HTTPException(status_code=400, detail="Name required")
+        if name != doc["name"]:
+            if await db.sites.find_one({"name": name}):
+                raise HTTPException(status_code=400, detail="A branch with this name already exists")
+            updates["name"] = name
+    if payload.address is not None:
+        updates["address"] = payload.address.strip() or None
+    if payload.clear_geofence:
+        updates.update({"lat": None, "lng": None, "radius_m": None})
+    elif payload.lat is not None or payload.lng is not None or payload.radius_m is not None:
+        if payload.lat is None or payload.lng is None or payload.radius_m is None:
+            raise HTTPException(status_code=400, detail="Pin a location and set a radius")
+        if not (-90 <= payload.lat <= 90 and -180 <= payload.lng <= 180):
+            raise HTTPException(status_code=400, detail="Invalid location")
+        if not (10 <= payload.radius_m <= 10000):
+            raise HTTPException(status_code=400, detail="Radius must be between 10 and 10000 metres")
+        updates.update({"lat": payload.lat, "lng": payload.lng, "radius_m": payload.radius_m})
+    if not updates:
+        raise HTTPException(status_code=400, detail="No changes")
+    await db.sites.update_one({"unit_id": unit_id}, {"$set": updates})
+    if "name" in updates:
+        await db.users.update_many({"site": doc["name"]}, {"$set": {"site": updates["name"]}})
+        await db.users.update_many({"managed_sites": doc["name"]}, {"$set": {"managed_sites.$": updates["name"]}})
+    new_doc = await db.sites.find_one({"unit_id": unit_id}, {"_id": 0})
+    detail = f"radius {new_doc.get('radius_m')} m" if new_doc.get("radius_m") else "geofence cleared"
+    await log_activity(user, "branch_updated", new_doc["name"], detail)
+    return {"ok": True, "site": new_doc}
 
 @api_router.delete("/admin/org/sites/{unit_id}")
 async def delete_site(unit_id: str, user: dict = Depends(require_admin)):
@@ -1273,6 +1370,7 @@ async def delete_site(unit_id: str, user: dict = Depends(require_admin)):
         raise HTTPException(status_code=404, detail="Not found")
     await db.sites.delete_one({"unit_id": unit_id})
     await db.users.update_many({"site": doc["name"]}, {"$set": {"site": None}})
+    await db.users.update_many({"managed_sites": doc["name"]}, {"$pull": {"managed_sites": doc["name"]}})
     await log_activity(user, "site_removed", doc["name"])
     return {"ok": True}
 
@@ -1356,7 +1454,19 @@ async def admin_delete_employee(user_id: str, user: dict = Depends(require_manag
 @api_router.patch("/admin/employees/{user_id}/assignment")
 async def admin_set_assignment(user_id: str, payload: AssignmentUpdate, user: dict = Depends(require_manager)):
     await ensure_manages_other(user, user_id)
-    updates = {k: (v or None) for k, v in payload.model_dump(exclude_unset=True).items()}
+    updates = {k: (v or None) for k, v in payload.model_dump(exclude_unset=True).items() if k not in ("name", "email")}
+    if payload.name is not None:
+        if not payload.name.strip():
+            raise HTTPException(status_code=400, detail="Name cannot be empty")
+        updates["name"] = payload.name.strip()
+    if payload.email is not None:
+        email = payload.email.strip().lower()
+        if not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", email):
+            raise HTTPException(status_code=400, detail="Enter a valid email address")
+        clash = await db.users.find_one({"email": email, "user_id": {"$ne": user_id}}, {"_id": 0, "user_id": 1})
+        if clash:
+            raise HTTPException(status_code=400, detail="Another employee already uses this email")
+        updates["email"] = email
     if not updates:
         raise HTTPException(status_code=400, detail="No fields to update")
     res = await db.users.update_one({"user_id": user_id}, {"$set": updates})
@@ -1365,6 +1475,16 @@ async def admin_set_assignment(user_id: str, payload: AssignmentUpdate, user: di
     emp = await db.users.find_one({"user_id": user_id}, {"_id": 0, "face_descriptor": 0, "password_hash": 0})
     await log_activity(user, "employee_assigned", emp.get("name", user_id), ", ".join(f"{k}={v}" for k, v in updates.items()))
     return {"ok": True, "employee": emp}
+
+@api_router.patch("/admin/employees/{user_id}/field_staff")
+async def admin_set_field_staff(user_id: str, payload: FieldStaffUpdate, user: dict = Depends(require_manager)):
+    await ensure_manages_other(user, user_id)
+    emp = await db.users.find_one({"user_id": user_id}, {"_id": 0, "name": 1})
+    if not emp:
+        raise HTTPException(status_code=404, detail="Employee not found")
+    await db.users.update_one({"user_id": user_id}, {"$set": {"field_staff": payload.field_staff}})
+    await log_activity(user, "field_staff_changed", emp.get("name", user_id), "can punch anywhere" if payload.field_staff else "branch area only")
+    return {"ok": True}
 
 @api_router.patch("/admin/employees/{user_id}/scope")
 async def admin_set_scope(user_id: str, payload: ScopeUpdate, user: dict = Depends(require_admin)):

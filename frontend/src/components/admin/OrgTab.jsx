@@ -6,7 +6,6 @@ import { Plus, Trash, ShieldCheck } from "@phosphor-icons/react";
 export default function OrgTab() {
   const [org, setOrg] = useState({ departments: [], sites: [], managers: [] });
   const [deptName, setDeptName] = useState("");
-  const [siteName, setSiteName] = useState("");
 
   const load = async () => {
     try { setOrg((await api.get("/admin/org")).data); }
@@ -35,8 +34,11 @@ export default function OrgTab() {
     <div className="grid lg:grid-cols-2 gap-6" data-testid="org-tab">
       <UnitList title="Departments" kind="departments" units={org.departments} value={deptName} setValue={setDeptName}
         onAdd={() => add("departments", deptName, setDeptName)} onRemove={(u) => remove("departments", u)} testid="departments"/>
-      <UnitList title="Sites / Branches" kind="sites" units={org.sites} value={siteName} setValue={setSiteName}
-        onAdd={() => add("sites", siteName, setSiteName)} onRemove={(u) => remove("sites", u)} testid="sites"/>
+      <div className="border border-border bg-card p-4 text-sm text-muted-foreground" data-testid="branches-moved-note">
+        <span className="label-overline block mb-2 text-foreground">Branches</span>
+        Branches, their map locations and punch radius are managed in the <strong className="text-foreground">Branches</strong> tab.
+        Assign each sub-admin the branches they manage below.
+      </div>
 
       <div className="lg:col-span-2 border border-border bg-card" data-testid="subadmin-scopes">
         <div className="p-4 border-b border-border flex items-center gap-2">
@@ -123,12 +125,12 @@ function ScopeRow({ manager, org, onSaved }) {
           </div>
         </div>
         <div>
-          <div className="label-overline mb-1.5">Sites</div>
+          <div className="label-overline mb-1.5">Branches</div>
           <div className="flex flex-wrap gap-1.5">
             {org.sites.map(s => (
               <Chip key={s.unit_id} active={sites.includes(s.name)} onClick={() => toggle(sites, setSites, s.name)} testid={`scope-site-${manager.user_id}-${s.unit_id}`}>{s.name}</Chip>
             ))}
-            {org.sites.length === 0 && <span className="text-xs text-muted-foreground">Add sites first.</span>}
+            {org.sites.length === 0 && <span className="text-xs text-muted-foreground">Add branches first.</span>}
           </div>
         </div>
       </div>

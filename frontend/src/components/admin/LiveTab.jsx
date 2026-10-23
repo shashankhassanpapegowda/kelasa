@@ -14,6 +14,11 @@ export default function LiveTab() {
   const [selectedEmp, setSelectedEmp] = useState(null);
   const [empRoute, setEmpRoute] = useState({ pings: [], attendance: [] });
   const [photoModal, setPhotoModal] = useState(null);
+  const [branches, setBranches] = useState([]);
+
+  useEffect(() => {
+    api.get("/attendance/geofence").then(r => setBranches(r.data.branches || [])).catch(() => {});
+  }, []);
 
   useEffect(() => {
     if (!liveOn) return;
@@ -62,7 +67,7 @@ export default function LiveTab() {
           <div className="lg:col-span-2 h-[440px] border-b lg:border-b-0 lg:border-r border-border">
             {liveEmployees.length === 0
               ? <div className="h-full grid place-items-center text-sm text-muted-foreground p-6 text-center" data-testid="live-empty">No one is on duty right now.</div>
-              : <LiveMap employees={liveEmployees}/>}
+              : <LiveMap employees={liveEmployees} branches={branches}/>}
           </div>
           <div className="max-h-[440px] overflow-y-auto" data-testid="live-list">
             <div className="p-4 border-b border-border"><span className="label-overline">On Duty · Now</span></div>

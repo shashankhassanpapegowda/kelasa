@@ -12,6 +12,7 @@ export default function TeamTab({ isAdmin, currentUserId }) {
   const [org, setOrg] = useState({ departments: [], sites: [], managers: [] });
   const [q, setQ] = useState("");
   const [dept, setDept] = useState("all");
+  const [branch, setBranch] = useState("all");
   const [editing, setEditing] = useState(null);
   const [adding, setAdding] = useState(false);
   const [passwordFor, setPasswordFor] = useState(null);
@@ -32,8 +33,9 @@ export default function TeamTab({ isAdmin, currentUserId }) {
   const filtered = useMemo(() => employees.filter(e => {
     const matchQ = !q || `${e.name} ${e.email} ${e.employee_code || ""} ${e.designation || ""}`.toLowerCase().includes(q.toLowerCase());
     const matchD = dept === "all" || (dept === "none" ? !e.department : e.department === dept);
-    return matchQ && matchD;
-  }), [employees, q, dept]);
+    const matchB = branch === "all" || (branch === "none" ? !e.site : e.site === branch);
+    return matchQ && matchD && matchB;
+  }), [employees, q, dept, branch]);
 
   const act = async (fn, msg) => {
     try { await fn(); toast.success(msg); refresh(); }
@@ -65,6 +67,12 @@ export default function TeamTab({ isAdmin, currentUserId }) {
               {org.departments.map(d => <option key={d.unit_id} value={d.name}>{d.name}</option>)}
               <option value="none">Unassigned</option>
             </select>
+            <select value={branch} onChange={e => setBranch(e.target.value)} data-testid="team-branch-filter"
+              className="bg-background border border-border px-2 py-1.5 text-sm">
+              <option value="all">All branches</option>
+              {org.sites.map(s => <option key={s.unit_id} value={s.name}>{s.name}</option>)}
+              <option value="none">No branch</option>
+            </select>
             <button onClick={() => setAdding(true)} data-testid="add-employee-btn"
               className="bg-foreground text-background px-3 py-1.5 text-sm inline-flex items-center gap-2 hover:bg-primary transition-colors">
               <UserPlus size={15} weight="bold"/> Add Employee
@@ -86,6 +94,7 @@ export default function TeamTab({ isAdmin, currentUserId }) {
                   {emp.is_on_duty && !emp.on_break && <Tag className="bg-[#00E676] text-black">ON DUTY</Tag>}
                   {emp.on_break && <Tag className="bg-yellow-400 text-black">ON BREAK</Tag>}
                   {emp.role !== "employee" && <Tag className="border border-border">{ROLE_LABEL[emp.role]}</Tag>}
+                  {emp.field_staff && <Tag className="bg-[#0047FF]/15 text-[#0047FF]">FIELD STAFF</Tag>}
                   {emp.tracking_mode === "always_on" && <Tag className="bg-[#0047FF] text-white">24/7</Tag>}
                   {emp.pending_invite && <Tag className="bg-secondary text-foreground">INVITE PENDING</Tag>}
                   {!emp.has_password && <Tag className="bg-[#FF3B30]/15 text-[#FF3B30]">NO PASSWORD</Tag>}
@@ -95,7 +104,7 @@ export default function TeamTab({ isAdmin, currentUserId }) {
                 <div className="text-xs text-muted-foreground truncate">{emp.email}</div>
                 <div className="text-[10px] font-mono text-muted-foreground mt-1 flex items-center gap-1.5 flex-wrap">
                   <Buildings size={11} weight="bold"/>
-                  <span>{emp.department || "No department"}{emp.site ? ` · ${emp.site}` : ""}</span>
+                  <span>{emp.site || "No branch"}{emp.department ? ` · ${emp.department}` : ""}</span>
                   {emp.designation && <span>· {emp.designation}</span>}
                 </div>
                 <div className="text-[10px] font-mono text-muted-foreground mt-0.5 flex items-center gap-1.5">
@@ -168,10 +177,13 @@ export default function TeamTab({ isAdmin, currentUserId }) {
 
       {editing && (
         <EmployeeEditModal emp={editing} org={org} isAdmin={isAdmin} onClose={() => setEditing(null)}
-          onSave={async ({ shift, assignment, role }) => {
+          onSave={async ({ shift, assignment, role, fieldStaff }) => {
             try {
-              await api.patch(`/admin/employees/${editing.user_id}/shift`, shift);
               await api.patch(`/admin/employees/${editing.user_id}/assignment`, assignment);
+              await api.patch(`/admin/employees/${editing.user_id}/shift`, shift);
+              if (fieldStaff !== !!editing.field_staff) {
+                await api.patch(`/admin/employees/${editing.user_id}/field_staff`, { field_staff: fieldStaff });
+              }
               if (isAdmin && role && role !== editing.role) {
                 await api.patch(`/admin/employees/${editing.user_id}/role`, { role });
               }
@@ -263,7 +275,7 @@ function EmployeeFormModal({ org, isAdmin, onClose, onSave }) {
               {org.departments.map(d => <option key={d.unit_id} value={d.name}>{d.name}</option>)}
             </select>
           </Field>
-          <Field label="Site">
+          <Field label="Branch">
             <select value={f.site} onChange={set("site")} className={inputCls} data-testid="new-emp-site">
               <option value="">—</option>
               {org.sites.map(s => <option key={s.unit_id} value={s.name}>{s.name}</option>)}
@@ -310,15 +322,18 @@ function EmployeeEditModal({ emp, org, isAdmin, onClose, onSave }) {
     shift_start: emp.shift_start || "", shift_end: emp.shift_end || "", break_max_minutes: emp.break_max_minutes ?? 60,
   });
   const [a, setA] = useState({
-    department: emp.department || "", site: emp.site || "", manager_id: emp.manager_id || "",
+    name: emp.name || "", email: emp.email || "", department: emp.department || "", site: emp.site || "", manager_id: emp.manager_id || "",
     designation: emp.designation || "", phone: emp.phone || "", employee_code: emp.employee_code || "",
   });
   const [role, setRole] = useState(emp.role);
+  const [fieldStaff, setFieldStaff] = useState(!!emp.field_staff);
   const setAs = (k) => (e) => setA(prev => ({ ...prev, [k]: e.target.value }));
   return (
     <Modal title="Employee Settings" subtitle={emp.name} onClose={onClose} testid="edit-employee-modal">
       <div className="p-5 space-y-4">
         <div className="grid sm:grid-cols-2 gap-3">
+          <Field label="Full Name"><input value={a.name} onChange={setAs("name")} className={inputCls} data-testid="edit-emp-name"/></Field>
+          <Field label="Work Email"><input type="email" value={a.email} onChange={setAs("email")} placeholder="name@company.com" className={inputCls} data-testid="edit-emp-email"/></Field>
           <Field label="Shift Start"><input type="time" value={shift.shift_start} onChange={e => setShift(s => ({ ...s, shift_start: e.target.value }))} className={`${inputCls} font-mono`} data-testid="shift-start-input"/></Field>
           <Field label="Shift End"><input type="time" value={shift.shift_end} onChange={e => setShift(s => ({ ...s, shift_end: e.target.value }))} className={`${inputCls} font-mono`} data-testid="shift-end-input"/></Field>
           <Field label="Break Limit (min)"><input type="number" min="0" max="600" value={shift.break_max_minutes} onChange={e => setShift(s => ({ ...s, break_max_minutes: parseInt(e.target.value || "0", 10) }))} className={`${inputCls} font-mono`} data-testid="break-max-input"/></Field>
@@ -329,7 +344,7 @@ function EmployeeEditModal({ emp, org, isAdmin, onClose, onSave }) {
               {org.departments.map(d => <option key={d.unit_id} value={d.name}>{d.name}</option>)}
             </select>
           </Field>
-          <Field label="Site">
+          <Field label="Branch">
             <select value={a.site} onChange={setAs("site")} className={inputCls} data-testid="edit-emp-site">
               <option value="">—</option>
               {org.sites.map(s => <option key={s.unit_id} value={s.name}>{s.name}</option>)}
@@ -353,9 +368,20 @@ function EmployeeEditModal({ emp, org, isAdmin, onClose, onSave }) {
             </Field>
           )}
         </div>
+        <label className="flex items-start gap-3 border border-border p-3 cursor-pointer hover:bg-secondary/40" data-testid="edit-emp-field-staff">
+          <input type="checkbox" checked={fieldStaff} onChange={e => setFieldStaff(e.target.checked)} className="mt-0.5 accent-[#0047FF]" data-testid="edit-emp-field-staff-checkbox"/>
+          <span>
+            <span className="text-sm font-medium block">Field staff — can punch from anywhere</span>
+            <span className="text-[11px] text-muted-foreground">When off, they can punch in/out only inside a branch circle.</span>
+          </span>
+        </label>
         <p className="text-[10px] text-muted-foreground">Breaks longer than the limit are flagged as over-break. Late detection has a 15-minute grace.</p>
         <div className="flex items-center gap-2 pt-1">
-          <button onClick={() => onSave({ shift, assignment: a, role })} data-testid="save-employee-btn"
+          <button onClick={() => {
+              if (!a.name.trim()) return toast.error("Name is required");
+              if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(a.email.trim())) return toast.error("Enter a valid work email");
+              onSave({ shift, assignment: { ...a, name: a.name.trim(), email: a.email.trim() }, role, fieldStaff });
+            }} data-testid="save-employee-btn"
             className="flex-1 bg-foreground text-background px-4 py-3 hover:bg-primary transition-colors font-medium">Save Changes</button>
           <button onClick={onClose} className="border border-border px-4 py-3 hover:bg-secondary">Cancel</button>
         </div>

@@ -12,6 +12,24 @@ import { Camera, Clock, Path as PathIcon, MapPin, ArrowsClockwise, GpsFix, Warni
 
 const PING_INTERVAL_MS = 30_000;
 
+const distM = (a, b) => {
+  const R = 6371000, rad = (d) => d * Math.PI / 180;
+  const dLat = rad(b.lat - a.lat), dLng = rad(b.lng - a.lng);
+  const h = Math.sin(dLat / 2) ** 2 + Math.cos(rad(a.lat)) * Math.cos(rad(b.lat)) * Math.sin(dLng / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(h));
+};
+
+const zoneFor = (fence, pos) => {
+  if (!fence || fence.field_staff || !fence.branches.length || !pos) return null;
+  const slack = Math.min(pos.accuracy || 0, fence.tolerance_m);
+  let best = null;
+  for (const b of fence.branches) {
+    const gap = distM(pos, b) - b.radius_m;
+    if (!best || gap < best.gap) best = { name: b.name, gap, inside: gap <= slack };
+  }
+  return best;
+};
+
 const fmtTime = (iso) => iso ? new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : "—";
 const fmtDate = (iso) => iso ? new Date(iso).toLocaleDateString([], { day: '2-digit', month: 'short' }) : "—";
 const fmtDuration = (mins) => {
@@ -45,6 +63,8 @@ export default function Dashboard() {
   const [pendingGeo, setPendingGeo] = useState(null);
   const [livePos, setLivePos] = useState(null);
   const [notice, setNotice] = useState(null);
+  const [fence, setFence] = useState(null);
+  const [zone, setZone] = useState(null);
   const pingTimer = useRef(null);
   const tickTimer = useRef(null);
   const liveStopRef = useRef(null);
@@ -67,6 +87,10 @@ export default function Dashboard() {
   };
 
   useEffect(() => { refresh(); }, []);
+
+  useEffect(() => {
+    api.get("/attendance/geofence").then(r => setFence(r.data)).catch(() => {});
+  }, []);
 
   useEffect(() => {
     api.get("/announcements?limit=1")
@@ -122,6 +146,12 @@ export default function Dashboard() {
       const g = await getAccuratePosition({ desiredAccuracy: 30, fallbackAccuracy: 150, maxWait: 15000 });
       if (g.accuracy > 200) {
         toast.warning(`Low GPS accuracy (±${Math.round(g.accuracy)}m). Move outside / enable Precise Location.`);
+      }
+      const z = zoneFor(fence, g);
+      setZone(z);
+      if (z && !z.inside) {
+        toast.error(`You are ${Math.round(z.gap)} m outside ${z.name}. Move inside a branch area to punch ${mode}.`);
+        return;
       }
       setPendingGeo(g);
       setFaceMode(mode);
@@ -281,6 +311,20 @@ export default function Dashboard() {
                 )}
                 {busy && <div className="loading-bar w-full mt-2"/>}
               </div>
+              {fence && (
+                <div className="mt-4 text-xs font-mono flex items-center gap-1.5" data-testid="geofence-zone">
+                  <MapPin size={13} weight="bold" className={zone ? (zone.inside ? "text-[#00E676]" : "text-[#FF3B30]") : "text-muted-foreground"}/>
+                  {fence.field_staff
+                    ? <span className="text-muted-foreground">Field staff · you can punch from anywhere</span>
+                    : !fence.branches.length
+                      ? <span className="text-muted-foreground">No branch area set · punch from anywhere</span>
+                      : zone
+                        ? zone.inside
+                          ? <span className="text-[#00E676]">Inside {zone.name}</span>
+                          : <span className="text-[#FF3B30]">{Math.round(zone.gap)} m outside {zone.name}</span>
+                        : <span className="text-muted-foreground">Punch only inside a branch area ({fence.branches.length} branch{fence.branches.length > 1 ? "es" : ""})</span>}
+                </div>
+              )}
               <p className="mt-3 text-xs text-muted-foreground flex items-start gap-1.5 max-w-md">
                 <WarningCircle size={14} weight="bold" className="mt-0.5 shrink-0"/>
                 Allow camera + <strong>Precise Location</strong>. Location tracking pauses during breaks.

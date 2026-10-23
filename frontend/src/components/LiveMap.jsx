@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "react";
-import { MapContainer, TileLayer, CircleMarker, Polyline, Tooltip, useMap } from "react-leaflet";
+import { MapContainer, TileLayer, Circle, CircleMarker, Polyline, Tooltip, useMap } from "react-leaflet";
 import L from "leaflet";
 
 // Stable, distinct colour per worker (used for both trail and marker border)
@@ -24,7 +24,7 @@ function FitOnce({ points }) {
   return null;
 }
 
-export default function LiveMap({ employees = [], height = "100%" }) {
+export default function LiveMap({ employees = [], branches = [], height = "100%" }) {
   const withLoc = employees.filter((e) => e.lat != null && e.lng != null);
   const center = withLoc.length ? [withLoc[0].lat, withLoc[0].lng] : [12.9716, 77.5946];
 
@@ -41,6 +41,15 @@ export default function LiveMap({ employees = [], height = "100%" }) {
           attribution="&copy; OpenStreetMap contributors"
           url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
         />
+
+        {branches.map((b) => (
+          <Circle key={b.unit_id} center={[b.lat, b.lng]} radius={b.radius_m}
+            pathOptions={{ color: "#0047FF", weight: 1.5, dashArray: "5 5", fillOpacity: 0.06 }}>
+            <Tooltip direction="center" opacity={0.9} className="kelasa-map-label">
+              <div className="font-mono text-[10px]">{b.name} · {b.radius_m} m</div>
+            </Tooltip>
+          </Circle>
+        ))}
 
         {/* Fading last-hour trail behind each marker */}
         {withLoc.map((e) => {

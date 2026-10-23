@@ -23,8 +23,10 @@ const LABELS = {
   announcement_removed: "Removed notice",
   department_added: "Added department",
   department_removed: "Removed department",
-  site_added: "Added site",
-  site_removed: "Removed site",
+  site_added: "Added branch",
+  site_removed: "Removed branch",
+  branch_updated: "Updated branch geofence",
+  field_staff_changed: "Changed field staff",
 };
 
 export default function ActivityTab() {

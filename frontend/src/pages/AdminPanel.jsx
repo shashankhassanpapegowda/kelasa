@@ -8,9 +8,10 @@ import OrgTab from "@/components/admin/OrgTab";
 import CalendarTab from "@/components/admin/CalendarTab";
 import NoticesTab from "@/components/admin/NoticesTab";
 import ActivityTab from "@/components/admin/ActivityTab";
+import BranchesTab from "@/components/admin/BranchesTab";
 import { api } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
-import { Gauge, Broadcast, Users, AirplaneTilt, CalendarBlank, Megaphone, Buildings, ClockCounterClockwise } from "@phosphor-icons/react";
+import { Gauge, Broadcast, Users, AirplaneTilt, CalendarBlank, Megaphone, Buildings, ClockCounterClockwise, MapPinArea } from "@phosphor-icons/react";
 
 const TABS = [
   { id: "overview", label: "Overview", icon: Gauge },
@@ -19,6 +20,7 @@ const TABS = [
   { id: "leave", label: "Leave", icon: AirplaneTilt },
   { id: "calendar", label: "Holidays", icon: CalendarBlank },
   { id: "notices", label: "Notices", icon: Megaphone },
+  { id: "branches", label: "Branches", icon: MapPinArea, adminOnly: true },
   { id: "org", label: "Organisation", icon: Buildings, adminOnly: true },
   { id: "activity", label: "Activity", icon: ClockCounterClockwise, adminOnly: true },
 ];
@@ -56,7 +58,7 @@ export default function AdminPanel() {
               </h1>
               {!isAdmin && (
                 <p className="text-xs text-muted-foreground mt-2 max-w-md">
-                  You are seeing only the people you cover — your reportees plus your assigned departments and sites.
+                  You are seeing only the people you cover — your reportees plus your assigned branches and departments.
                 </p>
               )}
             </div>
@@ -86,6 +88,7 @@ export default function AdminPanel() {
             {tab === "leave" && <LeaveTab isAdmin={isAdmin} currentUserId={user?.user_id} onDecided={refreshPending}/>}
             {tab === "calendar" && <CalendarTab isAdmin={isAdmin}/>}
             {tab === "notices" && <NoticesTab/>}
+            {tab === "branches" && isAdmin && <BranchesTab/>}
             {tab === "org" && isAdmin && <OrgTab/>}
             {tab === "activity" && isAdmin && <ActivityTab/>}
           </div>
