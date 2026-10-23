@@ -117,7 +117,11 @@ function useSaver(fields, p, onSaved) {
   const dirty = fields.some(k => (p[k] || "") !== f[k]);
   const save = async () => {
     setBusy(true);
-    try { const { data } = await api.put("/profile/me", f); onSaved(data); toast.success("Saved"); }
+    try {
+      const { data } = await api.put("/profile/me", f);
+      setF(Object.fromEntries(fields.map(k => [k, data[k] || ""])));
+      onSaved(data); toast.success("Saved");
+    }
     catch (e) { toast.error(e?.response?.data?.detail || "Could not save"); }
     finally { setBusy(false); }
   };

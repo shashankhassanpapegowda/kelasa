@@ -56,7 +56,7 @@ function Person({ c, big }) {
   const { icon: Icon, color } = KIND[c.kind];
   const size = big ? "w-12 h-12" : "w-9 h-9";
   return (
-    <div className={`flex items-center gap-3 ${big ? "" : "px-4 py-3"}`} data-testid={`celebration-${c.user_id}-${c.kind}`}>
+    <div className={`flex items-center gap-3 min-w-0 ${big ? "pr-1" : "px-4 py-3"}`} data-testid={`celebration-${c.user_id}-${c.kind}`}>
       <div className="relative shrink-0">
         <AuthPhoto path={c.avatar_path} className={`${size} rounded-full object-cover border border-border`}
           fallback={<div className={`${size} rounded-full bg-secondary grid place-items-center text-sm font-medium`}>{c.name?.[0]}</div>}/>

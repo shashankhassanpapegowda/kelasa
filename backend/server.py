@@ -992,6 +992,15 @@ async def download_file(path: str, request: Request, auth: Optional[str] = Query
     session = await db.user_sessions.find_one({"session_token": token}, {"_id": 0})
     if not session:
         raise HTTPException(status_code=401, detail="Invalid session")
+    parts = path.split("/")
+    if len(parts) < 3 or parts[0] != APP_NAME:
+        raise HTTPException(status_code=404, detail="File not found")
+    if parts[1] != "avatars" and parts[2] != session["user_id"]:
+        viewer = await db.users.find_one({"user_id": session["user_id"]}, {"_id": 0})
+        if not viewer or viewer.get("role") not in ("admin", "sub_admin"):
+            raise HTTPException(status_code=403, detail="Not allowed")
+        if viewer["role"] == "sub_admin":
+            await ensure_in_scope(viewer, parts[2])
     try:
         data, content_type = get_object(path)
     except Exception:
@@ -2506,7 +2515,7 @@ PROFILE_DATE_FIELDS = ("dob", "wedding_anniversary", "date_of_joining")
 PROFILE_LABELS = {"dob": "Date of birth", "wedding_anniversary": "Wedding anniversary", "date_of_joining": "Joining date"}
 IFSC_RE = re.compile(r"^[A-Z]{4}0[A-Z0-9]{6}$")
 
-def clean_profile(payload: ProfileUpdate) -> dict:
+def clean_profile(payload: ProfileUpdate, today_iso: str) -> dict:
     out = {}
     data = payload.model_dump(exclude_unset=True)
     for k in PROFILE_DATE_FIELDS:
@@ -2517,7 +2526,7 @@ def clean_profile(payload: ProfileUpdate) -> dict:
                     d = ddate.fromisoformat(v)
                 except ValueError:
                     raise HTTPException(status_code=400, detail=f"Invalid {PROFILE_LABELS[k].lower()}") from None
-                if d > ddate.today():
+                if d > ddate.fromisoformat(today_iso):
                     raise HTTPException(status_code=400, detail=f"{PROFILE_LABELS[k]} can't be in the future")
             out[k] = v or None
     if "uan" in data:
@@ -2574,7 +2583,7 @@ async def my_profile(user: dict = Depends(get_current_user)):
 
 @api_router.put("/profile/me")
 async def update_my_profile(payload: ProfileUpdate, user: dict = Depends(get_current_user)):
-    updates = clean_profile(payload)
+    updates = clean_profile(payload, user_local_today(user))
     await save_profile_fields(user["user_id"], updates)
     await log_activity(user, "profile_updated", user.get("name", ""), ", ".join(updates))
     return await load_profile(user["user_id"])
@@ -2588,10 +2597,14 @@ async def upload_avatar(payload: AvatarUpload, user: dict = Depends(get_current_
         raise HTTPException(status_code=400, detail="Invalid image") from None
     if len(data) > 3 * 1024 * 1024:
         raise HTTPException(status_code=400, detail="Photo too large (max 3 MB)")
-    if not (data[:3] == b"\xff\xd8\xff" or data[:8] == b"\x89PNG\r\n\x1a\n"):
+    if data[:3] == b"\xff\xd8\xff":
+        ext, ctype = "jpg", "image/jpeg"
+    elif data[:8] == b"\x89PNG\r\n\x1a\n":
+        ext, ctype = "png", "image/png"
+    else:
         raise HTTPException(status_code=400, detail="Use a JPG or PNG photo")
-    path = f"{APP_NAME}/avatars/{user['user_id']}/{uuid.uuid4().hex}.jpg"
-    result = await asyncio.to_thread(put_object, path, data, "image/jpeg")
+    path = f"{APP_NAME}/avatars/{user['user_id']}/{uuid.uuid4().hex}.{ext}"
+    result = await asyncio.to_thread(put_object, path, data, ctype)
     await db.users.update_one({"user_id": user["user_id"]}, {"$set": {"avatar_path": result["path"]}})
     return {"ok": True, "avatar_path": result["path"]}
 
@@ -2644,7 +2657,7 @@ async def admin_update_employee_profile(user_id: str, payload: ProfileUpdate, us
     emp = await db.users.find_one({"user_id": user_id}, {"_id": 0, "name": 1})
     if not emp:
         raise HTTPException(status_code=404, detail="Employee not found")
-    updates = clean_profile(payload)
+    updates = clean_profile(payload, user_local_today(user))
     await save_profile_fields(user_id, updates)
     await log_activity(user, "profile_updated", emp.get("name", user_id), ", ".join(updates))
     return await load_profile(user_id)
@@ -2719,7 +2732,7 @@ async def celebrations(days: int = Query(7, ge=0, le=31), user: dict = Depends(g
             if away > days:
                 continue
             years = nxt.year - orig.year
-            if kind == "work_anniversary" and years < 1:
+            if kind != "birthday" and years < 1:
                 continue
             out.append({
                 "user_id": u["user_id"], "name": u.get("name"), "avatar_path": u.get("avatar_path"),

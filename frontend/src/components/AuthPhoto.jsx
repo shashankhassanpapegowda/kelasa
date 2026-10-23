@@ -1,32 +1,29 @@
 import { useEffect, useState } from "react";
-import { api, API } from "@/lib/api";
+import { api } from "@/lib/api";
 
-/**
- * Auth-aware <img> that fetches an object-storage file via the backend
- * with credentials and displays it as a blob URL.
- */
+const cache = new Map();
+
+const loadBlobUrl = (path) => {
+  if (!cache.has(path)) {
+    const p = api.get(`/files/${path}`, { responseType: "blob" })
+      .then(res => URL.createObjectURL(res.data))
+      .catch(err => { cache.delete(path); throw err; });
+    cache.set(path, p);
+  }
+  return cache.get(path);
+};
+
+/** Auth-aware <img> for object-storage files; blob URLs are cached per path. */
 export default function AuthPhoto({ path, className, alt = "", fallback = null }) {
   const [src, setSrc] = useState(null);
   const [err, setErr] = useState(false);
 
   useEffect(() => {
-    if (!path) { setSrc(null); return; }
+    setSrc(null); setErr(false);
+    if (!path) return;
     let cancelled = false;
-    let objUrl = null;
-    (async () => {
-      try {
-        const res = await api.get(`/files/${path}`, { responseType: "blob" });
-        if (cancelled) return;
-        objUrl = URL.createObjectURL(res.data);
-        setSrc(objUrl);
-      } catch {
-        if (!cancelled) setErr(true);
-      }
-    })();
-    return () => {
-      cancelled = true;
-      if (objUrl) URL.revokeObjectURL(objUrl);
-    };
+    loadBlobUrl(path).then(u => { if (!cancelled) setSrc(u); }).catch(() => { if (!cancelled) setErr(true); });
+    return () => { cancelled = true; };
   }, [path]);
 
   if (!path || err) return fallback;

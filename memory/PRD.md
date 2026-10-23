@@ -127,3 +127,11 @@ Employee attendance and route-tracking app, now expanding into a full **employee
 - Notices tab has an "Also send to everyone's phone" checkbox (ticked by default) → `notify_phones`. Sends "Notice: <title>" plus the body (up to 180 chars) to every subscribed device except the poster's; the number of devices reached is saved as `pushed_devices`.
 - Per-device switches `leave_updates` / `announcements` (both on by default) via PATCH /api/push/subscribe. Employee card (Leave page) shows both; the admin card shows Announcements.
 - Self-tested via curl with fake endpoints: devices that opted out and the author's device are skipped; unticked notices aren't pushed.
+
+## 2026-06 — Employee profile + celebrations
+- /profile page (header avatar + "Profile" nav): photo upload (resized to a 512px square, stored in object storage as `users.avatar_path`), date of birth / wedding anniversary / joining date, EPF UAN (12 digits) / ESI (10 or 17 digits), bank account (holder, number 9–18 digits, IFSC, bank name).
+- `employee_profiles` collection (sensitive data kept apart from users). Bank changes go into `bank_change_requests` (pending → approved/rejected/superseded/cancelled). Only main admins approve, from the Team tab panel; the employee gets a push on the decision.
+- Sensitive view: the employee, admins, and sub-admins for their own team (`GET /api/admin/employees/{id}/profile`, PROFILE button in the Team tab).
+- `/api/celebrations`: today plus the next 7 days — birthdays, wedding and work anniversaries (years ≥ 1); birth year never shown. Celebrations card appears on My Day and the Console Overview.
+- /api/files now limits face/check-in photos to their owner or a manager in scope; avatars are visible to all signed-in users. AuthPhoto caches blob URLs.
+- Tested: iteration_13 (29/29 backend, frontend flows pass) and every reported issue fixed.
