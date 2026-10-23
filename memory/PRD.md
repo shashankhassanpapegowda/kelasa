@@ -78,3 +78,17 @@ Employee attendance and route-tracking app, now expanding into a full **employee
 - P2: Leave calendar view (who is away this month) + email/WhatsApp notification on leave decision
 - P2: Split server.py into routers; shadcn date-picker instead of native inputs
 - P2: Redeploy — production still runs code from before the 2026-10-22 release
+
+## 2026-06 — Branch geofencing, field staff, editable employee email
+- Admin Console → **Branches** tab (admin only): add/rename/delete branches, pin location on map (click, place search via backend `/api/admin/geocode` → Photon → Nominatim → Open-Meteo fallback, or "My location"), radius 10–10000 m.
+- Punch in/out blocked (403) unless inside ANY branch circle (radius + min(GPS accuracy, 50 m) slack). No pinned branches ⇒ geofencing off. Branch name saved on attendance (`check_in_branch`/`check_out_branch`).
+- `field_staff` flag per employee (Team → Edit checkbox) bypasses geofence. `PATCH /api/admin/employees/{id}/field_staff`.
+- Employee dashboard pre-checks zone and shows "Inside X / N m outside X"; camera won't open outside.
+- Live Map draws branch circles. Team tab: Branch filter, "Site" renamed "Branch". Sub-admin coverage chips = Branches (managed_sites).
+- Edit existing employee name + email (validated, unique, lowercased; email change signs them out).
+- Tested: iteration_8 (backend 21/21, frontend flows pass).
+
+### Backlog
+- P1: Per-branch geofence report (punches outside / by branch) in Reports + CSV branch column
+- P1: Payroll export (deferred by user)
+- P2: Auto check-out when leaving geofence, marker clustering, multilingual

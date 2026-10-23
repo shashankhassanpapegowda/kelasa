@@ -327,7 +327,7 @@ export default function Dashboard() {
               )}
               <p className="mt-3 text-xs text-muted-foreground flex items-start gap-1.5 max-w-md">
                 <WarningCircle size={14} weight="bold" className="mt-0.5 shrink-0"/>
-                Allow camera + <strong>Precise Location</strong>. Location tracking pauses during breaks.
+                <span>Allow camera + <strong>Precise Location</strong>. Location tracking pauses during breaks.</span>
               </p>
             </div>
 

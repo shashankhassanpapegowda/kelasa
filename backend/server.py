@@ -1363,6 +1363,42 @@ async def update_site(unit_id: str, payload: BranchUpdate, user: dict = Depends(
     await log_activity(user, "branch_updated", new_doc["name"], detail)
     return {"ok": True, "site": new_doc}
 
+GEOCODE_UA = {"User-Agent": "Kelasa-Attendance/1.0 (branch geofence setup)"}
+
+@api_router.get("/admin/geocode")
+async def admin_geocode(q: str, user: dict = Depends(require_admin)):
+    q = q.strip()[:200]
+    if not q:
+        raise HTTPException(status_code=400, detail="Enter a place to search")
+    async with httpx.AsyncClient(timeout=10, headers=GEOCODE_UA) as hc:
+        try:
+            r = await hc.get("https://photon.komoot.io/api/", params={"q": q, "limit": 1})
+            feats = r.json().get("features", []) if r.status_code == 200 else []
+            if feats:
+                lng, lat = feats[0]["geometry"]["coordinates"]
+                p = feats[0].get("properties", {})
+                label = ", ".join(x for x in (p.get("name"), p.get("street"), p.get("city"), p.get("state"), p.get("country")) if x)
+                return {"result": {"lat": lat, "lng": lng, "label": label}}
+        except (httpx.HTTPError, ValueError, KeyError):
+            pass
+        try:
+            r = await hc.get("https://nominatim.openstreetmap.org/search", params={"q": q, "format": "json", "limit": 1})
+            hits = r.json() if r.status_code == 200 else []
+            if hits:
+                return {"result": {"lat": float(hits[0]["lat"]), "lng": float(hits[0]["lon"]), "label": hits[0].get("display_name", "")}}
+        except (httpx.HTTPError, ValueError, KeyError):
+            pass
+        try:
+            r = await hc.get("https://geocoding-api.open-meteo.com/v1/search", params={"name": q.split(",")[0].strip(), "count": 1})
+            hits = r.json().get("results", []) if r.status_code == 200 else []
+            if hits:
+                h = hits[0]
+                label = ", ".join(x for x in (h.get("name"), h.get("admin1"), h.get("country")) if x)
+                return {"result": {"lat": h["latitude"], "lng": h["longitude"], "label": label, "approximate": True}}
+        except (httpx.HTTPError, ValueError, KeyError):
+            pass
+    return {"result": None}
+
 @api_router.delete("/admin/org/sites/{unit_id}")
 async def delete_site(unit_id: str, user: dict = Depends(require_admin)):
     doc = await db.sites.find_one({"unit_id": unit_id}, {"_id": 0})
@@ -1467,6 +1503,9 @@ async def admin_set_assignment(user_id: str, payload: AssignmentUpdate, user: di
         if clash:
             raise HTTPException(status_code=400, detail="Another employee already uses this email")
         updates["email"] = email
+        current = await db.users.find_one({"user_id": user_id}, {"_id": 0, "email": 1})
+        if current and current.get("email") != email:
+            await db.user_sessions.delete_many({"user_id": user_id})
     if not updates:
         raise HTTPException(status_code=400, detail="No fields to update")
     res = await db.users.update_one({"user_id": user_id}, {"$set": updates})

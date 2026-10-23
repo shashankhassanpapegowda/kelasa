@@ -43,6 +43,11 @@ export default function AdminPanel() {
 
   const visible = TABS.filter(t => isAdmin || !t.adminOnly);
 
+  useEffect(() => {
+    if (user && !visible.some(t => t.id === tab)) setTab("overview");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user, tab]);
+
   return (
     <div className="min-h-screen bg-background flex flex-col">
       <AppHeader/>

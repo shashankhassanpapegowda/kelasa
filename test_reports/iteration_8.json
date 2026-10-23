@@ -1,0 +1,41 @@
+{
+  "summary": "Iteration 8 - branch geofencing, field staff, and editing employee name/email. Backend: 21/21 new pytest checks pass (test_geofence_branches.py). Covered: GET /attendance/geofence (field_staff, tolerance_m=50, branches); PATCH /admin/org/sites/{id} validation (radius 5/20000, lat sent without lng, lat=100, empty body -> 400; unknown id -> 404; sub-admin -> 403); setting a geofence and then clearing it; renaming a branch updates users.site and the managed_sites entries, and a duplicate name -> 400. Check-in/check-out: outside the circle -> 403 with the 'X m outside GeoTest HQ ... punch in/out' message; accuracy slack is capped at 50 m (blocked at 60 m past the edge with accuracy 1000; allowed at 35 m past the edge with accuracy 40); a punch inside ANY branch circle is allowed and check_in_branch/check_out_branch are stored; field staff can punch from anywhere; sub-admin field_staff out of scope -> 403; with no branch pinned, punches are allowed anywhere. Assignment endpoint: invalid email/duplicate email (case-insensitive)/blank name -> 400; email is lowercased; after an email change, login works with the new email and the old one returns 401; sub-admin editing someone out of scope -> 403. Regression: leave suites 41/43 pass. Of the 2 failures, one is intended behaviour (sub-admin may decide any leave) and one is a stale holiday-date conflict in the test data. Frontend (Playwright): Branches tab and status banner; adding a branch opens the edit modal automatically; the modal renders above the header; clicking the map drops a pin and shows coords; radius input and slider; rename + address + save -> row shows '350 M RADIUS' and the banner count updates; radius 5 shows a toast; Remove Geofence -> NOT PINNED; delete branch works. Sub-admin does not see the Branches tab. Org tab shows branches-moved-note and 'Branches' coverage chips. Team tab: 'Branch' label, branch filter, name/email edit with duplicate/invalid toasts, save and restore, field staff checkbox -> FIELD STAFF tag on/off. Live Map draws the dashed branch circle while an employee is on duty. Employee My Day: outside (12.99) -> toast 'You are 1846 m outside GeoTest HQ' and the zone line turns red, the camera does NOT open; inside (12.9720) -> 'Inside GeoTest HQ' and the face modal opens.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "PATCH /api/admin/employees/{id}/assignment", "issue": "Changing an employee's email does not revoke their existing sessions or log anything beyond the activity log. That is acceptable, but if an email is reassigned for security reasons the old sessions stay valid."},
+      {"endpoint": "PATCH /api/admin/org/sites/{id} rename", "issue": "managed_sites.$ positional update only replaces the first match per user (fine unless there are duplicates). Also there is no unique index on sites.name, so concurrent adds can race (low risk)."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "BranchEditModal search (Find)", "issue": "Nominatim place search failed in testing. The browser fetch to nominatim.openstreetmap.org was blocked by CORS because Nominatim returned HTTP 429 (rate-limited; a 429 response has no ACAO header). curl from the server also got 429. The UI shows a 'Search failed — click on the map instead' toast, so clicking on the map still works. Nominatim's usage policy requires an identifying User-Agent/Referer and is unreliable for direct browser use. Recommend proxying through the backend (/api/geocode with a proper User-Agent and caching) or switching to photon.komoot.io, with a fallback.", "selector": "[data-testid=branch-search-btn]", "priority": "MEDIUM"},
+      {"component": "AdminPanel hash routing", "issue": "A sub-admin opening /admin#branches (or #org) gets a blank content area with no tab selected. It should fall back to the overview tab.", "selector": "[data-testid=tab-overview]", "priority": "LOW"}
+    ],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Global toasts (top-right)", "issues": ["Sonner toasts sit over the header's user name/Password/Sign out buttons for ~4 s after every action. Consider bottom-right placement or a top offset."]},
+      {"screen": "Employee My Day", "issues": ["The 'Allow camera + Precise Location. Location tracking pauses during breaks.' hint wraps into odd columns on desktop (flex children breaking around <strong>) - pre-existing", "In headless screenshots the Today's Route Leaflet map appeared painted over the lower half of the Face Check-In modal (z-50). Hit-testing (elementFromPoint) confirmed the modal is on top, so this is probably a compositing artefact, but consider portalling FaceCapture with z-[1000] like BranchEditModal to be safe."]}
+    ]
+  },
+  "test_report_links": ["/app/backend/tests/test_geofence_branches.py", "/app/test_reports/pytest/pytest_iter8.xml"],
+  "action_items": [
+    "MEDIUM: make branch place search reliable - proxy Nominatim via the backend with a User-Agent (or use Photon); the direct browser call currently fails with 429/CORS",
+    "LOW: AdminPanel should fall back to overview when the hash tab is not allowed for the role",
+    "LOW: move toasts so they don't cover header controls; optionally portal the FaceCapture modal with a higher z-index"
+  ],
+  "critical_code_review_comments": [
+    "server.py is ~1950 lines - split into routers (auth, attendance/geofence, admin/org, leave)",
+    "Team edit save makes up to 4 sequential PATCHes (assignment, shift, field_staff, role). If a later call fails, the change is only partly applied and the user sees a single 'Update failed'.",
+    "Geofence check runs after the face match but before the upload, which is good. Location is still client-supplied (spoofable GPS) - inherent limitation, worth documenting.",
+    "BranchesTab, TeamTab and other modals still use native <select>/<input type=time|date> rather than shadcn components (pre-existing)"
+  ],
+  "updated_files": ["/app/backend/tests/test_geofence_branches.py"],
+  "success_rate": {"backend": "100% (21/21 new tests); leave regression 41/43 (both failures are test-data/intended-behaviour)", "frontend": "~95% (all requested flows work; place search fails due to Nominatim 429/CORS)"},
+  "test_credentials": "Unchanged. Tester re-inserted the missing test_session_emp_001 session (needed by older regression suites). Ravi login emp1.test@gtgroups.local / RaviReset@26.",
+  "seed_data_creation": "Temporary TEST_Branch_*, TEST_UI Branch and TEST employees were created and deleted. 6 zero-minute test attendance sessions for Ravi on 2026-10-23 (and their pings) were deleted. Final state: user_testemp01 checked out and field_staff=false; Anita's email is emp2.test@gtgroups.local and her name is Anita Shetty; GeoTest HQ is at 12.9716,77.5946 with r=200; login_attempts cleared.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Run pytest /app/backend/tests/test_geofence_branches.py. It temporarily clears and restores the GeoTest HQ geofence and needs Ravi to be off duty. Browser geofence testing: context.grant_permissions(['geolocation','camera']) + set_geolocation; 12.99 is outside and 12.9720 is inside GeoTest HQ. test_iter6 out-of-scope leave test is obsolete (intended behaviour changed). The holiday test fails if the holiday already exists.",
+  "rca of the issue": "Branch search: BranchEditModal calls fetch('https://nominatim.openstreetmap.org/search...') straight from the browser. Nominatim rate-limits/blocks anonymous or shared-IP traffic with HTTP 429, and that error response has no Access-Control-Allow-Origin header, so the browser reports a CORS error and the catch shows 'Search failed'. Mitigation: call it from the backend with a descriptive User-Agent and caching (respect 1 req/s), or use a geocoder that supports CORS."
+}

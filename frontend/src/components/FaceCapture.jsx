@@ -91,7 +91,7 @@ export default function FaceCapture({ open, title, subtitle, onClose, onCapture,
   };
 
   return (
-    <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm grid place-items-center p-4" data-testid="face-capture-modal">
+    <div className="fixed inset-0 z-[1000] bg-black/80 backdrop-blur-sm grid place-items-center p-4" data-testid="face-capture-modal">
       <div className="bg-card border border-border w-full max-w-md">
         <div className="p-4 border-b border-border flex items-center justify-between">
           <div>

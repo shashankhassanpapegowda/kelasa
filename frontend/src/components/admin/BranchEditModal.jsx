@@ -20,11 +20,11 @@ export default function BranchEditModal({ branch, others, onClose, onSaved }) {
     if (!query.trim()) return;
     setBusy(true);
     try {
-      const r = await fetch(`https://nominatim.openstreetmap.org/search?format=json&limit=1&q=${encodeURIComponent(query)}`);
-      const [hit] = await r.json();
-      if (!hit) return toast.error("Place not found — try a nearby landmark or click on the map");
-      setPin({ lat: parseFloat(hit.lat), lng: parseFloat(hit.lon) });
-      if (!address) setAddress(hit.display_name);
+      const { data } = await api.get("/admin/geocode", { params: { q: query.trim() } });
+      if (!data.result) return toast.error("Place not found — try a nearby landmark or click on the map");
+      setPin({ lat: data.result.lat, lng: data.result.lng });
+      if (!address) setAddress(data.result.label);
+      if (data.result.approximate) toast.info("Showing the town centre — click the exact spot on the map");
     } catch { toast.error("Search failed — click on the map instead"); }
     finally { setBusy(false); }
   };
