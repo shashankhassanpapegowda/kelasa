@@ -1,0 +1,36 @@
+{
+  "summary": "Tested Alert History and Long Absence Escalation, backend and frontend. Backend: 22 new pytest tests plus 8 regression tests from iteration 9. All 30 pass. Covered: the settings GET/PUT (GET for managers, PUT admin only, values 5-480, 400/422 errors), the minutes_outside, escalation_level and needs_attention fields, the ack -> re-alert -> ack cycle (acknowledged_level stored), changing the setting, history range, fields and sub-admin scoping, and history.csv (columns, filename, ?auth= token, 401/403, scoping). Frontend: Alerts tab works for admin (setting card: invalid value shows the backend error toast, saving 45 shows a toast and survives a reload, then restored to 30; From/To default to today; stats, day blocks, rows with 'still outside', Away, Near, Repeats and Acknowledged; Left-Area Log CSV download). Sub-admin sees the tab but not the setting card, and no out-of-scope rows. Reports 'Left Area' view shows the history, and the main button 'Left-Area CSV' downloads the history CSV. Live banner shows 'STILL OUTSIDE · N MIN'. An acknowledged alert disappears, then comes back after being backdated to the next level, with the toast 'Ravi Kumar still outside · 125 min' and one beep. Regression checked: MAP opens #live, Branch view, and the Employee CSV.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "/api/admin/geofence-alerts/history(.csv)", "issue": "escalation_level ('Repeat Alerts') for resolved alerts is worked out again from the current escalate_minutes. If the setting changes, past numbers change too, and acknowledged_level no longer matches (changing 30 -> 10 makes every acknowledged open alert alert again). Consider storing the level when the alert is resolved."},
+      {"endpoint": "/api/admin/geofence-alerts/history", "issue": "The range filter and day grouping use the attendance check-in date, not the local date the person left. On overnight shifts, an exit after midnight is listed under the previous day."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [
+      {"flow": "Reports Left Area view", "issue": "AlertHistory refetches as soon as From/To change, without waiting for Apply. The By Employee and By Branch views wait for Apply.", "affected_selectors": ["report-view-alerts"]}
+    ],
+    "design_issues": [
+      {"screen": "Alerts tab / Reports Left Area", "issues": ["Times on screen use the browser's timezone (fmtTime), but the CSV uses the user's profile timezone. For example, the screen showed 08:24 while the CSV showed 13:54 when the browser was on UTC and the profile on IST.", "From/To use the browser's native date input instead of the shadcn Calendar. This existed before this change."]}
+    ]
+  },
+  "test_report_links": ["/app/backend/tests/test_alert_history_escalation.py", "/app/backend/tests/test_geofence_alerts_branch_report.py", "/app/test_reports/pytest/pytest_iter10.xml"],
+  "action_items": [
+    "Optional: store escalation_level and minutes when an alert is resolved, so history does not change when escalate_minutes changes.",
+    "Optional: show CSV times and on-screen times in the same timezone.",
+    "Optional: make the Left Area view in Reports wait for Apply, like the other views."
+  ],
+  "critical_code_review_comments": [
+    "server.py is about 2315 lines; split it into routers (geofence, reports, admin).",
+    "admin_reports_csv still repeats the auth code in manager_from_request.",
+    "Escalation-setting input has no check in the browser (min=5 is not enforced before the request is sent). The backend 400 toast does cover it."
+  ],
+  "updated_files": ["/app/backend/tests/test_alert_history_escalation.py"],
+  "success_rate": {"backend": "100% (30/30)", "frontend": "100%"},
+  "seed_data_creation": "TEST_ geofence_alerts are created and removed by the test module. Ravi was checked in and out again with ui_setup_iter9.py, which created one more real alert dated 2026-10-23. Final state: Ravi checked out, no open alerts, escalate_minutes=30.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "To test re-alerts, backdate created_at in mongo for geofence_alerts and wait for the 15s banner poll. To count beeps, patch window.AudioContext through page.evaluate with an arrow function, not add_init_script, which made the page hang. Reports route is /admin/reports."
+}

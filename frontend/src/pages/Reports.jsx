@@ -25,6 +25,7 @@ export default function Reports() {
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(false);
   const [view, setView] = useState("employees");
+  const [applied, setApplied] = useState({ from: null, to: null });
   const [branchData, setBranchData] = useState({ punches: [], zone_alerts: 0 });
 
   const load = async () => {
@@ -35,6 +36,7 @@ export default function Reports() {
         api.get(`/admin/reports/branches?from=${from}&to=${to}`),
       ]);
       setRows(res.data.rows || []);
+      setApplied({ from, to });
       setBranchData(b.data);
     } catch (e) {
       toast.error(e?.response?.data?.detail || "Failed to load report");
@@ -104,7 +106,7 @@ export default function Reports() {
             ))}
           </div>
 
-          {view === "alerts" && <div className="mt-6"><AlertHistory from={from} to={to} showDownload={false}/></div>}
+          {view === "alerts" && <div className="mt-6"><AlertHistory from={applied.from} to={applied.to} showDownload={false}/></div>}
           {view === "branches" && <BranchReport punches={branchData.punches || []} zoneAlerts={branchData.zone_alerts || 0}/>}
 
           {view === "employees" && <>

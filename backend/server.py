@@ -322,9 +322,7 @@ async def track_zone(user: dict, record: dict, lat: float, lng: float, accuracy:
     open_alert = await db.geofence_alerts.find_one({"record_id": record["record_id"], "resolved_at": None}, {"_id": 0})
     now_iso = now_utc().isoformat()
     if inside and open_alert:
-        await db.geofence_alerts.update_one({"alert_id": open_alert["alert_id"]}, {"$set": {
-            "resolved_at": now_iso, "resolved_reason": f"back inside {inside}",
-        }})
+        await resolve_alerts({"alert_id": open_alert["alert_id"]}, now_iso, f"back inside {inside}")
     elif not inside and open_alert:
         await db.geofence_alerts.update_one({"alert_id": open_alert["alert_id"]}, {"$set": {
             "lat": lat, "lng": lng, "distance_m": int(gap), "nearest_branch": nearest["name"], "last_seen_at": now_iso,
@@ -972,9 +970,7 @@ async def check_out(payload: CheckRequest, user: dict = Depends(get_current_user
         "accuracy": payload.accuracy,
         "timestamp": out_dt.isoformat(),
     })
-    await db.geofence_alerts.update_many({"record_id": active["record_id"], "resolved_at": None}, {"$set": {
-        "resolved_at": out_dt.isoformat(), "resolved_reason": "checked out",
-    }})
+    await resolve_alerts({"record_id": active["record_id"], "resolved_at": None}, out_dt.isoformat(), "checked out")
     return {"ok": True, "duration_minutes": total_minutes, "net_work_minutes": net_minutes, "over_break": over_break}
 
 # ---------- Breaks ----------
@@ -2115,10 +2111,22 @@ async def escalate_minutes() -> int:
     doc = await db.settings.find_one({"key": "geofence"}, {"_id": 0})
     return (doc or {}).get("escalate_minutes") or DEFAULT_ESCALATE_MINUTES
 
+async def resolve_alerts(query: dict, resolved_iso: str, reason: str):
+    every = await escalate_minutes()
+    for a in await db.geofence_alerts.find(query, {"_id": 0}).to_list(100):
+        a["resolved_at"] = resolved_iso
+        e = enrich_alert(a, every)
+        await db.geofence_alerts.update_one({"alert_id": a["alert_id"]}, {"$set": {
+            "resolved_at": resolved_iso, "resolved_reason": reason,
+            "final_minutes": e["minutes_outside"], "final_level": e["escalation_level"],
+        }})
+
 def enrich_alert(a: dict, every: int) -> dict:
     end = parse_iso(a["resolved_at"]) if a.get("resolved_at") else now_utc()
-    minutes = max(0, int((end - parse_iso(a["created_at"])).total_seconds() // 60))
-    level = minutes // every
+    minutes = a.get("final_minutes")
+    if minutes is None:
+        minutes = max(0, int((end - parse_iso(a["created_at"])).total_seconds() // 60))
+    level = a["final_level"] if a.get("final_level") is not None else minutes // every
     a["minutes_outside"] = minutes
     a["escalation_level"] = level
     a["needs_attention"] = not a.get("resolved_at") and (

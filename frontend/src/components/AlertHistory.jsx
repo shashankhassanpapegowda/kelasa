@@ -1,10 +1,13 @@
 import { useEffect, useMemo, useState } from "react";
 import { api } from "@/lib/api";
 import { toast } from "sonner";
-import { fmtTime, fmtDay, fmtDuration } from "@/lib/format";
+import { fmtDay, fmtDuration } from "@/lib/format";
+import { useAuth } from "@/lib/auth";
 import { Download, SignOut } from "@phosphor-icons/react";
 
 export default function AlertHistory({ from, to, showDownload = true }) {
+  const { user } = useAuth();
+  const tz = user?.timezone || "Asia/Kolkata";
   const [data, setData] = useState({ alerts: [], escalate_minutes: 30 });
   const [loading, setLoading] = useState(false);
 
@@ -60,12 +63,13 @@ export default function AlertHistory({ from, to, showDownload = true }) {
         </div>
       )}
 
-      {days.map(([day, list]) => <DayBlock key={day} day={day} list={list} every={data.escalate_minutes}/>)}
+      {days.map(([day, list]) => <DayBlock key={day} day={day} list={list} every={data.escalate_minutes} tz={tz}/>)}
     </div>
   );
 }
 
-function DayBlock({ day, list, every }) {
+function DayBlock({ day, list, every, tz }) {
+  const fmtTime = (iso) => new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", timeZone: tz });
   const total = list.reduce((s, a) => s + a.minutes_outside, 0);
   return (
     <div className="border border-border bg-card overflow-x-auto" data-testid={`alert-day-${day}`}>

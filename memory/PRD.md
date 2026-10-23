@@ -100,3 +100,11 @@ Employee attendance and route-tracking app, now expanding into a full **employee
 - Pings during breaks are skipped, so alerts don't update during breaks.
 - Not done: pinning Bengaluru HQ / Tumkur Yard — user did not provide locations.
 - Tested: iteration_9 (29/29 backend, frontend 100%).
+
+## 2026-06 — Alert history + long-absence escalation
+- Admin setting "repeat alert every N min" (5–480, default 30) — `GET/PUT /api/admin/settings/geofence`, Alerts tab (admin only card).
+- Open alerts carry minutes_outside / escalation_level / needs_attention; ACK stores acknowledged_level, so the banner re-alerts (beep + toast "still outside · N min") at every next interval until they return or check out.
+- Resolved alerts freeze final_minutes/final_level so history doesn't change if the setting changes.
+- Alert history: console "Alerts" tab (admin + sub-admin, scoped) and Reports "Left Area" view (uses applied range); day-by-day blocks with left/returned/away/near/repeats/acknowledged; CSV `/api/admin/geofence-alerts/history.csv`. Screen times use the profile timezone, same as the CSV.
+- Known: days are grouped by attendance (check-in) date, so overnight-shift exits count under the shift's start day.
+- Tested: iteration_10 (30/30 backend, frontend 100%) + post-fix regression 30/30.
