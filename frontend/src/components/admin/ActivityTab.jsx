@@ -13,6 +13,8 @@ const LABELS = {
   leave_approved: "Approved leave",
   leave_rejected: "Rejected leave",
   leave_type_added: "Added leave type",
+  password_set: "Set a password",
+  leave_cancelled: "Cancelled leave",
   leave_type_updated: "Updated leave type",
   leave_type_removed: "Retired leave type",
   holiday_added: "Added holiday",

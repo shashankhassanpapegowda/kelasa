@@ -12,6 +12,13 @@ import io
 import csv
 import httpx
 import requests
+import bcrypt
+import secrets as pysecrets
+import re
+import ipaddress
+from html import escape
+from html.parser import HTMLParser
+from urllib.parse import urlparse
 from pathlib import Path
 from pydantic import BaseModel, Field, ConfigDict
 from typing import List, Optional
@@ -130,6 +137,24 @@ class ShiftUpdate(BaseModel):
 class TrackingModeUpdate(BaseModel):
     tracking_mode: str  # "duty_only" | "always_on"
 
+class PasswordLogin(BaseModel):
+    email: str
+    password: str
+
+class PasswordChange(BaseModel):
+    current_password: str = ""
+    new_password: str
+
+class ForgotPassword(BaseModel):
+    email: str
+
+class ResetPassword(BaseModel):
+    token: str
+    new_password: str
+
+class SetEmployeePassword(BaseModel):
+    password: str
+
 class EmployeeCreate(BaseModel):
     name: str
     email: str
@@ -140,6 +165,7 @@ class EmployeeCreate(BaseModel):
     phone: Optional[str] = None
     employee_code: Optional[str] = None
     role: str = "employee"
+    password: Optional[str] = None
     shift_start: Optional[str] = None
     shift_end: Optional[str] = None
     break_max_minutes: Optional[int] = 60
@@ -260,6 +286,7 @@ async def get_current_user(request: Request) -> dict:
     user = await db.users.find_one({"user_id": session["user_id"]}, {"_id": 0})
     if not user:
         raise HTTPException(status_code=401, detail="User not found")
+    user.pop("password_hash", None)
     return user
 
 async def require_admin(user: dict = Depends(get_current_user)) -> dict:
@@ -378,7 +405,7 @@ async def auth_session(payload: SessionExchange, response: Response):
         key="session_token", value=session_token,
         max_age=7 * 24 * 60 * 60, httponly=True, secure=True, samesite="none", path="/",
     )
-    user_doc = await db.users.find_one({"user_id": user_id}, {"_id": 0, "face_descriptor": 0})
+    user_doc = await db.users.find_one({"user_id": user_id}, {"_id": 0, "face_descriptor": 0, "password_hash": 0})
     return {"user": user_doc, "session_token": session_token}
 
 @api_router.get("/auth/me")
@@ -394,6 +421,294 @@ async def logout(request: Request, response: Response):
         await db.user_sessions.delete_one({"session_token": token})
     response.delete_cookie("session_token", path="/")
     return {"ok": True}
+
+# ---------- Email (Emergent managed Resend) ----------
+EMAIL_BASE_URL = "https://integrations.emergentagent.com"
+EMAIL_KEY = os.environ.get("EMERGENT_EMAIL_KEY", "")
+EMAIL_FROM_NAME = os.environ.get("EMAIL_FROM_NAME", "Kelasa")
+EMAIL_REPLY_TO = os.environ.get("EMAIL_REPLY_TO")
+APP_PUBLIC_URL = os.environ.get("APP_PUBLIC_URL", "").rstrip("/")
+
+_SHORTENERS = ("bit.ly", "tinyurl.com", "t.co", "is.gd", "cutt.ly", "goo.gl", "rebrand.ly")
+_CRED_ASK = ("reply with your password", "reply with the code", "send your password", "cvv",
+             "send us your password", "enter your password below", "confirm your card number",
+             "your full card number", "seed phrase", "recovery phrase", "verify your card",
+             "social security number", "confirm your bank details")
+_HOSTISH = re.compile(r"\b(?:https?://)?((?:[a-z0-9-]+\.)+[a-z]{2,})", re.I)
+
+def _host_ok(host: str) -> bool:
+    if not host or "xn--" in host:
+        return False
+    try:
+        ipaddress.ip_address(host)
+        return False
+    except ValueError:
+        pass
+    return not any(host == s or host.endswith("." + s) for s in _SHORTENERS)
+
+def _same_site(shown: str, real: str) -> bool:
+    return shown == real or real.endswith("." + shown) or shown.endswith("." + real)
+
+class _EmailScan(HTMLParser):
+    def __init__(self):
+        super().__init__()
+        self.tags, self.urls, self.anchors = set(), [], []
+        self._href, self._text = None, []
+    def handle_starttag(self, tag, attrs):
+        self.tags.add(tag.lower())
+        self.urls += [v for k, v in attrs if k.lower() in ("href", "src") and v]
+        if tag.lower() == "a":
+            self._href = dict((k.lower(), v) for k, v in attrs).get("href")
+            self._text = []
+    def handle_data(self, data):
+        if self._href is not None:
+            self._text.append(data)
+    def handle_endtag(self, tag):
+        if tag.lower() == "a" and self._href is not None:
+            self.anchors.append((self._href, "".join(self._text)))
+            self._href, self._text = None, []
+
+def _assert_safe_email(subject: str, html: str) -> None:
+    scan = _EmailScan(); scan.feed(html)
+    if scan.tags & {"form", "input", "textarea", "select"}:
+        raise ValueError("No forms or input fields in email (G2)")
+    body = f"{subject}\n{html}".lower()
+    for p in _CRED_ASK:
+        if p in body:
+            raise ValueError(f"Email asks the recipient for credentials: {p!r} (G2)")
+    for url in scan.urls:
+        low = url.strip().lower()
+        if low.startswith(("mailto:", "tel:", "cid:", "#")):
+            continue
+        if not low.startswith("https://"):
+            raise ValueError(f"Email links/assets must be absolute https: {url!r} (G3)")
+        host = urlparse(low).hostname or ""
+        if not _host_ok(host) or urlparse(low).username is not None:
+            raise ValueError(f"Shortened, numeric-host or credential-bearing URL: {url!r} (G3)")
+    for href, text in scan.anchors:
+        real = urlparse(href.strip().lower()).hostname or ""
+        if not real:
+            continue
+        for m in _HOSTISH.finditer(text):
+            if not _same_site(m.group(1).lower(), real):
+                raise ValueError(f"Anchor text {m.group(1)!r} != real link host {real!r} (G3)")
+
+async def send_email(*, to: str, subject: str, html: str, reply_to: Optional[str] = None) -> Optional[str]:
+    _assert_safe_email(subject, html)
+    if not EMAIL_KEY:
+        logger.error("EMERGENT_EMAIL_KEY is not configured; cannot send email")
+        raise HTTPException(status_code=503, detail="Email is temporarily unavailable")
+    payload = {"to": [to], "subject": subject, "html": html, "from_name": EMAIL_FROM_NAME}
+    if reply_to or EMAIL_REPLY_TO:
+        payload["contact_email"] = reply_to or EMAIL_REPLY_TO
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.post(
+                f"{EMAIL_BASE_URL}/api/v1/email/send",
+                headers={"X-Email-Key": EMAIL_KEY},
+                json=payload,
+            )
+        resp.raise_for_status()
+        return resp.json().get("id")
+    except httpx.HTTPStatusError as e:
+        try:
+            code = e.response.json().get("code", "")
+            message = e.response.json().get("message", "")
+        except ValueError:
+            code, message = "", ""
+        if code in ("insufficient_credits", "integration_disabled", "daily_limit_reached"):
+            logger.warning(f"Email paused: {code} ({e.response.status_code}): {message}")
+            raise HTTPException(status_code=503, detail="Email is temporarily unavailable") from None
+        logger.error(f"Email send failed: {e.response.status_code} {e.response.text}")
+        raise HTTPException(status_code=502, detail="Failed to send email") from None
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Email send error: {e}")
+        raise HTTPException(status_code=500, detail="Failed to send email") from None
+
+# ---------- Password authentication ----------
+MIN_PASSWORD_LENGTH = 8
+MAX_LOGIN_ATTEMPTS = 5
+MAX_ACCOUNT_ATTEMPTS = 10
+LOCKOUT_MINUTES = 15
+
+def hash_password(password: str) -> str:
+    return bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
+
+def verify_password(plain: str, hashed: str) -> bool:
+    try:
+        return bcrypt.checkpw(plain.encode("utf-8"), hashed.encode("utf-8"))
+    except (ValueError, TypeError):
+        return False
+
+def validate_password(password: str) -> str:
+    pw = (password or "").strip()
+    if len(pw) < MIN_PASSWORD_LENGTH:
+        raise HTTPException(status_code=400, detail=f"Password must be at least {MIN_PASSWORD_LENGTH} characters")
+    return pw
+
+async def issue_session(user_id: str, response: Response) -> str:
+    token = pysecrets.token_urlsafe(32)
+    await db.user_sessions.insert_one({
+        "user_id": user_id,
+        "session_token": token,
+        "expires_at": (now_utc() + timedelta(days=7)).isoformat(),
+        "created_at": now_utc().isoformat(),
+    })
+    response.set_cookie(
+        key="session_token", value=token,
+        max_age=7 * 24 * 60 * 60, httponly=True, secure=True, samesite="none", path="/",
+    )
+    return token
+
+async def check_lockout(identifier: str):
+    doc = await db.login_attempts.find_one({"identifier": identifier}, {"_id": 0})
+    if not doc:
+        return
+    locked_until = doc.get("locked_until")
+    if locked_until:
+        lu = datetime.fromisoformat(locked_until)
+        if lu > now_utc():
+            mins = max(1, int((lu - now_utc()).total_seconds() // 60) + 1)
+            raise HTTPException(status_code=429, detail=f"Too many failed attempts. Try again in {mins} minute(s).")
+
+async def register_failed_attempt(identifier: str, limit: int = MAX_LOGIN_ATTEMPTS):
+    doc = await db.login_attempts.find_one({"identifier": identifier}, {"_id": 0})
+    attempts = (doc or {}).get("attempts", 0) + 1
+    update = {"identifier": identifier, "attempts": attempts, "updated_at": now_utc().isoformat()}
+    if attempts >= limit:
+        update["locked_until"] = (now_utc() + timedelta(minutes=LOCKOUT_MINUTES)).isoformat()
+        update["attempts"] = 0
+    await db.login_attempts.update_one({"identifier": identifier}, {"$set": update}, upsert=True)
+
+def client_ip(request: Request) -> str:
+    fwd = request.headers.get("x-forwarded-for", "")
+    if fwd:
+        return fwd.split(",")[0].strip()
+    return request.client.host if request.client else "unknown"
+
+@api_router.post("/auth/login")
+async def password_login(payload: PasswordLogin, request: Request, response: Response):
+    email = payload.email.strip().lower()
+    ip = client_ip(request)
+    identifier = f"{ip}:{email}"
+    await check_lockout(identifier)
+    await check_lockout(email)
+
+    user = await db.users.find_one({"email": email}, {"_id": 0})
+    if not user or not user.get("password_hash") or not verify_password(payload.password, user["password_hash"]):
+        await register_failed_attempt(identifier)
+        await register_failed_attempt(email, limit=MAX_ACCOUNT_ATTEMPTS)
+        raise HTTPException(status_code=401, detail="Incorrect email or password")
+
+    await db.login_attempts.delete_many({"identifier": {"$in": [identifier, email]}})
+    token = await issue_session(user["user_id"], response)
+    await db.users.update_one({"user_id": user["user_id"]}, {"$set": {"last_login_at": now_utc().isoformat(), "pending_invite": False}})
+    user_doc = await db.users.find_one({"user_id": user["user_id"]}, {"_id": 0, "face_descriptor": 0, "password_hash": 0})
+    return {"user": user_doc, "session_token": token}
+
+@api_router.post("/auth/change-password")
+async def change_password(payload: PasswordChange, user: dict = Depends(get_current_user)):
+    record = await db.users.find_one({"user_id": user["user_id"]}, {"_id": 0, "password_hash": 1})
+    current_hash = (record or {}).get("password_hash")
+    if current_hash and not verify_password(payload.current_password, current_hash):
+        raise HTTPException(status_code=400, detail="Your current password is incorrect")
+    new_pw = validate_password(payload.new_password)
+    if current_hash and verify_password(new_pw, current_hash):
+        raise HTTPException(status_code=400, detail="Pick a password you haven't used here before")
+    await db.users.update_one({"user_id": user["user_id"]}, {"$set": {
+        "password_hash": hash_password(new_pw),
+        "must_change_password": False,
+        "password_set_at": now_utc().isoformat(),
+    }})
+    return {"ok": True}
+
+@api_router.post("/auth/forgot-password")
+async def forgot_password(payload: ForgotPassword):
+    email = payload.email.strip().lower()
+    user = await db.users.find_one({"email": email}, {"_id": 0, "user_id": 1, "name": 1, "email": 1})
+    if user:
+        await db.password_reset_tokens.delete_many({"user_id": user["user_id"], "used": False})
+        token = pysecrets.token_urlsafe(32)
+        await db.password_reset_tokens.insert_one({
+            "token": token,
+            "user_id": user["user_id"],
+            "used": False,
+            "created_at": now_utc(),
+            "expires_at": now_utc() + timedelta(hours=1),
+        })
+        link = f"{APP_PUBLIC_URL}/reset-password?token={token}"
+        html = (
+            '<table role="presentation" width="100%"><tr><td style="padding:24px;font-family:Arial,sans-serif;color:#111">'
+            f'<p style="font-size:15px">Hi {escape(user.get("name") or "there")},</p>'
+            f'<p style="font-size:15px">We received a request to reset your {escape(EMAIL_FROM_NAME)} password. '
+            'Use the button below within the next hour.</p>'
+            f'<p><a href="{escape(link)}" style="display:inline-block;background:#111;color:#fff;'
+            'padding:12px 20px;text-decoration:none;font-weight:bold">Reset your password</a></p>'
+            '<p style="font-size:13px;color:#555">If you did not ask for this, you can ignore this email — '
+            'your current password keeps working.</p>'
+            f'<p style="font-size:12px;color:#888">Sent by {escape(EMAIL_FROM_NAME)}. '
+            'We never ask for your password or card details by email.</p>'
+            '</td></tr></table>'
+        )
+        try:
+            await send_email(to=user["email"], subject=f"Reset your {EMAIL_FROM_NAME} password", html=html)
+        except HTTPException as e:
+            logger.error(f"Password reset email failed for {email}: {e.detail}")
+    return {"ok": True, "message": "If that email is registered, a reset link is on its way."}
+
+@api_router.post("/auth/reset-password")
+async def reset_password(payload: ResetPassword):
+    doc = await db.password_reset_tokens.find_one({"token": payload.token}, {"_id": 0})
+    if not doc or doc.get("used"):
+        raise HTTPException(status_code=400, detail="This reset link is no longer valid. Request a new one.")
+    expires_at = doc["expires_at"]
+    if isinstance(expires_at, str):
+        expires_at = datetime.fromisoformat(expires_at)
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
+    if expires_at < now_utc():
+        raise HTTPException(status_code=400, detail="This reset link has expired. Request a new one.")
+    new_pw = validate_password(payload.new_password)
+    await db.users.update_one({"user_id": doc["user_id"]}, {"$set": {
+        "password_hash": hash_password(new_pw),
+        "must_change_password": False,
+        "password_set_at": now_utc().isoformat(),
+    }})
+    await db.password_reset_tokens.update_one({"token": payload.token}, {"$set": {"used": True}})
+    await db.user_sessions.delete_many({"user_id": doc["user_id"]})
+    return {"ok": True}
+
+async def seed_admin_password():
+    admin_email = (os.environ.get("ADMIN_EMAIL") or "").strip().lower()
+    admin_password = os.environ.get("ADMIN_PASSWORD")
+    if not admin_email or not admin_password:
+        return
+    user = await db.users.find_one({"email": admin_email}, {"_id": 0, "user_id": 1, "password_hash": 1})
+    if not user:
+        user_id = f"user_{uuid.uuid4().hex[:12]}"
+        await db.users.insert_one({
+            "user_id": user_id, "email": admin_email, "name": "Administrator", "picture": None,
+            "role": "admin", "face_enrolled": False, "face_descriptor": None, "face_photo_path": None,
+            "shift_start": None, "shift_end": None, "break_max_minutes": 60, "timezone": DEFAULT_TZ,
+            "tracking_mode": "duty_only", "password_hash": hash_password(admin_password),
+            "must_change_password": False, "pending_invite": False, "created_at": now_utc().isoformat(),
+        })
+        logger.info(f"Seeded admin account {admin_email}")
+    elif not user.get("password_hash"):
+        await db.users.update_one({"email": admin_email}, {"$set": {
+            "password_hash": hash_password(admin_password),
+            "must_change_password": False,
+            "role": "admin",
+        }})
+        logger.info(f"Set initial password for existing admin {admin_email}")
+
+async def ensure_indexes():
+    await db.users.create_index("email", unique=True)
+    await db.password_reset_tokens.create_index("expires_at", expireAfterSeconds=0)
+    await db.password_reset_tokens.create_index("token", unique=True)
+    await db.login_attempts.create_index("identifier", unique=True)
 
 # ---------- Face ----------
 @api_router.post("/face/enroll")
@@ -736,6 +1051,8 @@ async def admin_employees(user: dict = Depends(require_manager)):
         u.setdefault("phone", None)
         u.setdefault("employee_code", None)
         u.setdefault("pending_invite", False)
+        u.setdefault("must_change_password", False)
+        u["has_password"] = bool(u.pop("password_hash", None))
     return {"employees": users}
 
 @api_router.patch("/admin/employees/{user_id}/role")
@@ -784,7 +1101,7 @@ async def admin_set_shift(user_id: str, payload: ShiftUpdate, user: dict = Depen
     res = await db.users.update_one({"user_id": user_id}, {"$set": updates})
     if res.matched_count == 0:
         raise HTTPException(status_code=404, detail="User not found")
-    emp = await db.users.find_one({"user_id": user_id}, {"_id": 0, "face_descriptor": 0})
+    emp = await db.users.find_one({"user_id": user_id}, {"_id": 0, "face_descriptor": 0, "password_hash": 0})
     await log_activity(user, "shift_updated", (emp or {}).get("name", user_id), ", ".join(f"{k}={v}" for k, v in updates.items()))
     return {"ok": True, "employee": emp}
 
@@ -795,7 +1112,7 @@ async def admin_set_tracking_mode(user_id: str, payload: TrackingModeUpdate, use
     res = await db.users.update_one({"user_id": user_id}, {"$set": {"tracking_mode": payload.tracking_mode}})
     if res.matched_count == 0:
         raise HTTPException(status_code=404, detail="User not found")
-    emp = await db.users.find_one({"user_id": user_id}, {"_id": 0, "face_descriptor": 0})
+    emp = await db.users.find_one({"user_id": user_id}, {"_id": 0, "face_descriptor": 0, "password_hash": 0})
     return {"ok": True, "employee": emp}
 
 
@@ -807,7 +1124,7 @@ async def admin_live(user: dict = Depends(require_manager)):
     result = []
     for a in actives:
         emp = await db.users.find_one(
-            {"user_id": a["user_id"]}, {"_id": 0, "face_descriptor": 0}
+            {"user_id": a["user_id"]}, {"_id": 0, "face_descriptor": 0, "password_hash": 0}
         )
         if not emp:
             continue
@@ -842,7 +1159,7 @@ async def admin_live(user: dict = Depends(require_manager)):
 @api_router.get("/admin/employees/{user_id}/route")
 async def admin_employee_route(user_id: str, date: Optional[str] = None, user: dict = Depends(require_manager)):
     await ensure_in_scope(user, user_id)
-    emp = await db.users.find_one({"user_id": user_id}, {"_id": 0, "face_descriptor": 0})
+    emp = await db.users.find_one({"user_id": user_id}, {"_id": 0, "face_descriptor": 0, "password_hash": 0})
     if not emp:
         raise HTTPException(status_code=404, detail="Employee not found")
     d = date or user_local_today(emp)
@@ -860,7 +1177,7 @@ async def admin_attendance(date: Optional[str] = None, user: dict = Depends(requ
     ids = await scoped_user_ids(user)
     records = await db.attendance.find({"date": d, **user_filter(ids)}, {"_id": 0}).sort("check_in", 1).to_list(5000)
     user_ids = list({r["user_id"] for r in records})
-    users = await db.users.find({"user_id": {"$in": user_ids}}, {"_id": 0, "face_descriptor": 0}).to_list(1000)
+    users = await db.users.find({"user_id": {"$in": user_ids}}, {"_id": 0, "face_descriptor": 0, "password_hash": 0}).to_list(1000)
     umap = {u["user_id"]: u for u in users}
     for r in records:
         u = umap.get(r["user_id"], {})
@@ -972,9 +1289,27 @@ async def admin_create_employee(payload: EmployeeCreate, user: dict = Depends(re
         "created_at": now_utc().isoformat(),
         "created_by": user["user_id"],
     }
+    if payload.password:
+        doc["password_hash"] = hash_password(validate_password(payload.password))
+        doc["must_change_password"] = True
     await db.users.insert_one(doc)
     await log_activity(user, "employee_added", doc["name"], email)
-    return {"ok": True, "employee": {k: v for k, v in doc.items() if k not in ("_id", "face_descriptor")}}
+    return {"ok": True, "employee": {k: v for k, v in doc.items() if k not in ("_id", "face_descriptor", "password_hash")}}
+
+@api_router.patch("/admin/employees/{user_id}/password")
+async def admin_set_password(user_id: str, payload: SetEmployeePassword, user: dict = Depends(require_manager)):
+    await ensure_manages_other(user, user_id)
+    emp = await db.users.find_one({"user_id": user_id}, {"_id": 0, "name": 1})
+    if not emp:
+        raise HTTPException(status_code=404, detail="Employee not found")
+    await db.users.update_one({"user_id": user_id}, {"$set": {
+        "password_hash": hash_password(validate_password(payload.password)),
+        "must_change_password": True,
+        "password_set_at": now_utc().isoformat(),
+    }})
+    await db.user_sessions.delete_many({"user_id": user_id})
+    await log_activity(user, "password_set", emp.get("name", user_id), "temporary password issued")
+    return {"ok": True}
 
 @api_router.delete("/admin/employees/{user_id}")
 async def admin_delete_employee(user_id: str, user: dict = Depends(require_manager)):
@@ -1004,7 +1339,7 @@ async def admin_set_assignment(user_id: str, payload: AssignmentUpdate, user: di
     res = await db.users.update_one({"user_id": user_id}, {"$set": updates})
     if res.matched_count == 0:
         raise HTTPException(status_code=404, detail="Employee not found")
-    emp = await db.users.find_one({"user_id": user_id}, {"_id": 0, "face_descriptor": 0})
+    emp = await db.users.find_one({"user_id": user_id}, {"_id": 0, "face_descriptor": 0, "password_hash": 0})
     await log_activity(user, "employee_assigned", emp.get("name", user_id), ", ".join(f"{k}={v}" for k, v in updates.items()))
     return {"ok": True, "employee": emp}
 
@@ -1186,7 +1521,7 @@ async def admin_leave_list(
         q["status"] = status
     reqs = await db.leave_requests.find(q, {"_id": 0}).sort("created_at", -1).to_list(1000)
     emp_ids = list({r["user_id"] for r in reqs})
-    emps = await db.users.find({"user_id": {"$in": emp_ids}}, {"_id": 0, "face_descriptor": 0}).to_list(1000)
+    emps = await db.users.find({"user_id": {"$in": emp_ids}}, {"_id": 0, "face_descriptor": 0, "password_hash": 0}).to_list(1000)
     emap = {e["user_id"]: e for e in emps}
     for r in reqs:
         e = emap.get(r["user_id"], {})
@@ -1413,7 +1748,7 @@ async def admin_analytics(days: int = 14, user: dict = Depends(require_manager))
 async def build_report(from_date: str, to_date: str, user_ids=None) -> List[dict]:
     """Build per-employee aggregated report for date range (inclusive)."""
     uf = user_filter(user_ids)
-    users = await db.users.find(uf, {"_id": 0, "face_descriptor": 0}).to_list(1000)
+    users = await db.users.find(uf, {"_id": 0, "face_descriptor": 0, "password_hash": 0}).to_list(1000)
     # All records in range
     records = await db.attendance.find(
         {"date": {"$gte": from_date, "$lte": to_date}, **uf}, {"_id": 0}
@@ -1555,6 +1890,8 @@ app.add_middleware(
 @app.on_event("startup")
 async def startup():
     init_storage()
+    await ensure_indexes()
+    await seed_admin_password()
     await seed_leave_types()
 
 @app.on_event("shutdown")

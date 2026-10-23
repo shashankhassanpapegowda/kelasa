@@ -35,10 +35,20 @@ export const setUnauthorizedHandler = (fn) => { onUnauthorized = fn; };
 api.interceptors.response.use(
   (res) => res,
   (err) => {
-    if (err?.response?.status === 401) {
+    const url = err?.config?.url || "";
+    const isAuthAttempt = /\/auth\/(login|forgot-password|reset-password|change-password)/.test(url);
+    if (err?.response?.status === 401 && !isAuthAttempt) {
       setToken(null);
       if (onUnauthorized) onUnauthorized();
     }
     return Promise.reject(err);
   }
 );
+
+export const apiErrorMessage = (err, fallback = "Something went wrong. Please try again.") => {
+  const detail = err?.response?.data?.detail;
+  if (typeof detail === "string") return detail;
+  if (Array.isArray(detail)) return detail.map((e) => (e?.msg ? e.msg : JSON.stringify(e))).join(" ");
+  if (detail?.msg) return detail.msg;
+  return err?.message || fallback;
+};

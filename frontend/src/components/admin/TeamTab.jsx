@@ -3,7 +3,7 @@ import { api } from "@/lib/api";
 import { toast } from "sonner";
 import AuthPhoto from "@/components/AuthPhoto";
 import { fmtDuration } from "@/lib/format";
-import { UserPlus, PencilSimple, Trash, X, MagnifyingGlass, Clock as ClockIcon, Buildings } from "@phosphor-icons/react";
+import { UserPlus, PencilSimple, Trash, X, MagnifyingGlass, Clock as ClockIcon, Buildings, Key } from "@phosphor-icons/react";
 
 const ROLE_LABEL = { admin: "ADMIN", sub_admin: "SUB-ADMIN", employee: "EMPLOYEE" };
 
@@ -14,6 +14,7 @@ export default function TeamTab({ isAdmin, currentUserId }) {
   const [dept, setDept] = useState("all");
   const [editing, setEditing] = useState(null);
   const [adding, setAdding] = useState(false);
+  const [passwordFor, setPasswordFor] = useState(null);
   const [loading, setLoading] = useState(false);
 
   const refresh = async () => {
@@ -87,6 +88,8 @@ export default function TeamTab({ isAdmin, currentUserId }) {
                   {emp.role !== "employee" && <Tag className="border border-border">{ROLE_LABEL[emp.role]}</Tag>}
                   {emp.tracking_mode === "always_on" && <Tag className="bg-[#0047FF] text-white">24/7</Tag>}
                   {emp.pending_invite && <Tag className="bg-secondary text-foreground">INVITE PENDING</Tag>}
+                  {!emp.has_password && <Tag className="bg-[#FF3B30]/15 text-[#FF3B30]">NO PASSWORD</Tag>}
+                  {emp.must_change_password && emp.has_password && <Tag className="bg-yellow-400 text-black">TEMP PASSWORD</Tag>}
                   {!emp.face_enrolled && <Tag className="bg-yellow-500/20 text-yellow-700">NOT ENROLLED</Tag>}
                 </div>
                 <div className="text-xs text-muted-foreground truncate">{emp.email}</div>
@@ -109,6 +112,11 @@ export default function TeamTab({ isAdmin, currentUserId }) {
                   {(isAdmin || emp.user_id !== currentUserId) && (
                     <button onClick={() => setEditing(emp)} className="text-[10px] label-overline hover:text-primary inline-flex items-center gap-1" data-testid={`edit-emp-${emp.user_id}`}>
                       <PencilSimple size={10} weight="bold"/> EDIT
+                    </button>
+                  )}
+                  {(isAdmin || emp.user_id !== currentUserId) && (
+                    <button onClick={() => setPasswordFor(emp)} className="text-[10px] label-overline hover:text-primary inline-flex items-center gap-1" data-testid={`set-password-${emp.user_id}`}>
+                      <Key size={10} weight="bold"/> {emp.has_password ? "RESET PASSWORD" : "SET PASSWORD"}
                     </button>
                   )}
                   {isAdmin && (
@@ -144,6 +152,17 @@ export default function TeamTab({ isAdmin, currentUserId }) {
               toast.success(`${form.name} added — they can sign in with ${form.email}`);
               setAdding(false); refresh();
             } catch (e) { toast.error(e?.response?.data?.detail || "Could not add employee"); }
+          }}/>
+      )}
+
+      {passwordFor && (
+        <SetPasswordModal emp={passwordFor} onClose={() => setPasswordFor(null)}
+          onSave={async (password) => {
+            try {
+              await api.patch(`/admin/employees/${passwordFor.user_id}/password`, { password });
+              toast.success(`Password set for ${passwordFor.name} — share it with them, they'll be asked to change it`);
+              setPasswordFor(null); refresh();
+            } catch (e) { toast.error(e?.response?.data?.detail || "Could not set password"); }
           }}/>
       )}
 
@@ -195,10 +214,38 @@ function Modal({ title, subtitle, onClose, children, testid }) {
   );
 }
 
+function SetPasswordModal({ emp, onClose, onSave }) {
+  const [pw, setPw] = useState("");
+  const [err, setErr] = useState("");
+  const submit = () => {
+    if (pw.trim().length < 8) return setErr("At least 8 characters");
+    onSave(pw.trim());
+  };
+  return (
+    <Modal title={emp.has_password ? "Reset Password" : "Set Password"} subtitle={emp.name} onClose={onClose} testid="set-password-modal">
+      <div className="p-5 space-y-4">
+        <Field label="Temporary password">
+          <input type="text" value={pw} onChange={(e) => { setPw(e.target.value); setErr(""); }} className={`${inputCls} font-mono`}
+            placeholder="At least 8 characters" data-testid="temp-password-input" autoFocus/>
+        </Field>
+        {err && <p className="text-sm text-[#FF3B30]" data-testid="set-password-error">{err}</p>}
+        <p className="text-[11px] text-muted-foreground">
+          Share this with {emp.name.split(" ")[0]} directly. They'll be asked to set their own password the first time they sign in, and any active session of theirs is signed out now.
+        </p>
+        <div className="flex items-center gap-2">
+          <button onClick={submit} data-testid="save-password-btn"
+            className="flex-1 bg-foreground text-background px-4 py-3 hover:bg-primary transition-colors font-medium">Save Password</button>
+          <button onClick={onClose} className="border border-border px-4 py-3 hover:bg-secondary">Cancel</button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
 function EmployeeFormModal({ org, isAdmin, onClose, onSave }) {
   const [f, setF] = useState({
     name: "", email: "", department: "", site: "", manager_id: "", designation: "",
-    phone: "", employee_code: "", role: "employee", shift_start: "", shift_end: "", break_max_minutes: 60,
+    phone: "", employee_code: "", role: "employee", password: "", shift_start: "", shift_end: "", break_max_minutes: 60,
   });
   const set = (k) => (e) => setF(prev => ({ ...prev, [k]: e.target.value }));
   return (
@@ -207,6 +254,7 @@ function EmployeeFormModal({ org, isAdmin, onClose, onSave }) {
         <div className="grid sm:grid-cols-2 gap-3">
           <Field label="Full Name"><input value={f.name} onChange={set("name")} className={inputCls} data-testid="new-emp-name"/></Field>
           <Field label="Work Email"><input value={f.email} onChange={set("email")} type="email" className={inputCls} data-testid="new-emp-email"/></Field>
+          <Field label="First Password"><input value={f.password} onChange={set("password")} type="text" placeholder="At least 8 characters" className={`${inputCls} font-mono`} data-testid="new-emp-password"/></Field>
           <Field label="Employee Code"><input value={f.employee_code} onChange={set("employee_code")} className={inputCls} data-testid="new-emp-code"/></Field>
           <Field label="Phone"><input value={f.phone} onChange={set("phone")} className={inputCls} data-testid="new-emp-phone"/></Field>
           <Field label="Department">
@@ -241,7 +289,7 @@ function EmployeeFormModal({ org, isAdmin, onClose, onSave }) {
           )}
         </div>
         <p className="text-[11px] text-muted-foreground">
-          The employee signs in with Google using this exact email and lands straight on their own record.
+          Share the first password with them directly — they sign in with this email and are asked to set their own password straight away.
         </p>
         <div className="flex items-center gap-2 pt-1">
           <button onClick={() => onSave({ ...f, break_max_minutes: Number(f.break_max_minutes) || 60 })} data-testid="save-new-emp"

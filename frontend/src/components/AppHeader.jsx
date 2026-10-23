@@ -1,6 +1,6 @@
 import { useAuth } from "@/lib/auth";
 import { Link, useLocation, useNavigate } from "react-router-dom";
-import { SignOut, Gauge, MapTrifold, ChartBar, AirplaneTilt } from "@phosphor-icons/react";
+import { SignOut, Gauge, MapTrifold, ChartBar, AirplaneTilt, Lock } from "@phosphor-icons/react";
 
 export default function AppHeader() {
   const { user, logout } = useAuth();
@@ -48,6 +48,15 @@ export default function AppHeader() {
               <div className="text-[10px] label-overline" data-testid="user-role">{String(user?.role || "").replace("_", "-")}</div>
             </div>
           </div>
+          <Link
+            to="/change-password"
+            data-testid="nav-change-password"
+            title="Change password"
+            className="border border-border bg-card px-3 py-2 text-xs hover:bg-foreground hover:text-background transition-colors flex items-center gap-2"
+          >
+            <Lock size={14} weight="bold"/>
+            <span className="hidden lg:inline">Password</span>
+          </Link>
           <button
             onClick={async () => { await logout(); navigate("/", { replace: true }); }}
             data-testid="logout-button"
