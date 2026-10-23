@@ -8,6 +8,7 @@ import logging
 import uuid
 import math
 import base64
+import binascii
 import io
 import csv
 import httpx
@@ -211,6 +212,26 @@ class PushDeviceSettings(BaseModel):
     silent: Optional[bool] = None
     leave_updates: Optional[bool] = None
     announcements: Optional[bool] = None
+
+class ProfileUpdate(BaseModel):
+    dob: Optional[str] = None
+    wedding_anniversary: Optional[str] = None
+    date_of_joining: Optional[str] = None
+    uan: Optional[str] = None
+    esi: Optional[str] = None
+
+class BankDetailsIn(BaseModel):
+    account_holder: str
+    account_number: str
+    ifsc: str
+    bank_name: Optional[str] = None
+
+class AvatarUpload(BaseModel):
+    image_b64: str
+
+class BankDecision(BaseModel):
+    status: str
+    note: Optional[str] = None
 
 class GeofenceSettings(BaseModel):
     escalate_minutes: int
@@ -932,6 +953,7 @@ async def seed_admin_password():
 
 async def ensure_indexes():
     await db.users.create_index("email", unique=True)
+    await db.employee_profiles.create_index("user_id", unique=True)
     await db.password_reset_tokens.create_index("expires_at", expireAfterSeconds=0)
     await db.password_reset_tokens.create_index("token", unique=True)
     await db.login_attempts.create_index("identifier", unique=True)
@@ -2478,6 +2500,235 @@ async def admin_punches_csv(
         "Date", "Employee", "Email", "Home Branch", "Department", "Field Staff",
         "Punch In", "Punch In Branch", "Punch Out", "Punch Out Branch", "Net Work (min)", "Late (min)",
     ], rows, f"branch_punches_{from_date}_to_{to_date}.csv")
+
+# ---------- Employee profile ----------
+PROFILE_DATE_FIELDS = ("dob", "wedding_anniversary", "date_of_joining")
+PROFILE_LABELS = {"dob": "Date of birth", "wedding_anniversary": "Wedding anniversary", "date_of_joining": "Joining date"}
+IFSC_RE = re.compile(r"^[A-Z]{4}0[A-Z0-9]{6}$")
+
+def clean_profile(payload: ProfileUpdate) -> dict:
+    out = {}
+    data = payload.model_dump(exclude_unset=True)
+    for k in PROFILE_DATE_FIELDS:
+        if k in data:
+            v = (data[k] or "").strip()
+            if v:
+                try:
+                    d = ddate.fromisoformat(v)
+                except ValueError:
+                    raise HTTPException(status_code=400, detail=f"Invalid {PROFILE_LABELS[k].lower()}") from None
+                if d > ddate.today():
+                    raise HTTPException(status_code=400, detail=f"{PROFILE_LABELS[k]} can't be in the future")
+            out[k] = v or None
+    if "uan" in data:
+        v = re.sub(r"\s", "", data["uan"] or "")
+        if v and not re.fullmatch(r"\d{12}", v):
+            raise HTTPException(status_code=400, detail="UAN must be 12 digits")
+        out["uan"] = v or None
+    if "esi" in data:
+        v = re.sub(r"\s", "", data["esi"] or "")
+        if v and not re.fullmatch(r"\d{10}|\d{17}", v):
+            raise HTTPException(status_code=400, detail="ESI number must be 10 or 17 digits")
+        out["esi"] = v or None
+    return out
+
+def clean_bank(payload: BankDetailsIn) -> dict:
+    number = re.sub(r"\s", "", payload.account_number)
+    ifsc = payload.ifsc.strip().upper()
+    holder = payload.account_holder.strip()
+    if not holder:
+        raise HTTPException(status_code=400, detail="Account holder name required")
+    if not re.fullmatch(r"\d{9,18}", number):
+        raise HTTPException(status_code=400, detail="Account number must be 9 to 18 digits")
+    if not IFSC_RE.fullmatch(ifsc):
+        raise HTTPException(status_code=400, detail="IFSC must look like SBIN0001234")
+    return {"account_holder": holder, "account_number": number, "ifsc": ifsc, "bank_name": (payload.bank_name or "").strip() or None}
+
+async def load_profile(user_id: str) -> dict:
+    prof = await db.employee_profiles.find_one({"user_id": user_id}, {"_id": 0}) or {"user_id": user_id}
+    u = await db.users.find_one({"user_id": user_id}, {"_id": 0, "avatar_path": 1, "name": 1, "email": 1, "site": 1, "department": 1})
+    pending = await db.bank_change_requests.find_one({"user_id": user_id, "status": "pending"}, {"_id": 0})
+    last = await db.bank_change_requests.find_one(
+        {"user_id": user_id, "status": {"$ne": "pending"}}, {"_id": 0}, sort=[("decided_at", -1)]
+    )
+    return {**prof, **(u or {}), "pending_bank": pending, "last_bank_decision": last}
+
+async def ensure_can_view_sensitive(actor: dict, target_id: str):
+    if actor.get("role") == "admin":
+        return
+    if actor.get("role") == "sub_admin":
+        await ensure_in_scope(actor, target_id)
+        return
+    raise HTTPException(status_code=403, detail="Not allowed")
+
+async def save_profile_fields(user_id: str, updates: dict):
+    if not updates:
+        raise HTTPException(status_code=400, detail="No changes")
+    await db.employee_profiles.update_one(
+        {"user_id": user_id}, {"$set": {**updates, "updated_at": now_utc().isoformat()}, "$setOnInsert": {"user_id": user_id}}, upsert=True
+    )
+
+@api_router.get("/profile/me")
+async def my_profile(user: dict = Depends(get_current_user)):
+    return await load_profile(user["user_id"])
+
+@api_router.put("/profile/me")
+async def update_my_profile(payload: ProfileUpdate, user: dict = Depends(get_current_user)):
+    updates = clean_profile(payload)
+    await save_profile_fields(user["user_id"], updates)
+    await log_activity(user, "profile_updated", user.get("name", ""), ", ".join(updates))
+    return await load_profile(user["user_id"])
+
+@api_router.post("/profile/me/avatar")
+async def upload_avatar(payload: AvatarUpload, user: dict = Depends(get_current_user)):
+    raw = payload.image_b64.split(",", 1)[1] if payload.image_b64.startswith("data:") else payload.image_b64
+    try:
+        data = base64.b64decode(raw, validate=True)
+    except (ValueError, binascii.Error):
+        raise HTTPException(status_code=400, detail="Invalid image") from None
+    if len(data) > 3 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="Photo too large (max 3 MB)")
+    if not (data[:3] == b"\xff\xd8\xff" or data[:8] == b"\x89PNG\r\n\x1a\n"):
+        raise HTTPException(status_code=400, detail="Use a JPG or PNG photo")
+    path = f"{APP_NAME}/avatars/{user['user_id']}/{uuid.uuid4().hex}.jpg"
+    result = await asyncio.to_thread(put_object, path, data, "image/jpeg")
+    await db.users.update_one({"user_id": user["user_id"]}, {"$set": {"avatar_path": result["path"]}})
+    return {"ok": True, "avatar_path": result["path"]}
+
+@api_router.delete("/profile/me/avatar")
+async def delete_avatar(user: dict = Depends(get_current_user)):
+    await db.users.update_one({"user_id": user["user_id"]}, {"$set": {"avatar_path": None}})
+    return {"ok": True}
+
+@api_router.post("/profile/me/bank")
+async def request_bank_change(payload: BankDetailsIn, user: dict = Depends(get_current_user)):
+    bank = clean_bank(payload)
+    now_iso = now_utc().isoformat()
+    await db.bank_change_requests.update_many(
+        {"user_id": user["user_id"], "status": "pending"}, {"$set": {"status": "superseded", "decided_at": now_iso}}
+    )
+    req = {
+        "request_id": f"bank_{uuid.uuid4().hex[:12]}", "user_id": user["user_id"], "user_name": user.get("name"),
+        **bank, "status": "pending", "created_at": now_iso, "decided_at": None, "decided_by": None, "note": None,
+    }
+    await db.bank_change_requests.insert_one(dict(req))
+    await log_activity(user, "bank_change_requested", user.get("name", ""), f"{bank['ifsc']} ••{bank['account_number'][-4:]}")
+    admins = [a["user_id"] for a in await db.users.find({"role": "admin"}, {"_id": 0, "user_id": 1}).to_list(50)]
+    subs = await db.push_subscriptions.find({"user_id": {"$in": admins}}, {"_id": 0}).to_list(200)
+    if subs:
+        _track(asyncio.create_task(push_to_subscriptions(subs, {
+            "title": "Bank details change request", "body": f"{user.get('name')} submitted new bank details for approval",
+            "tag": req["request_id"], "url": "/admin#team",
+        })))
+    return {"ok": True, "request": req}
+
+@api_router.delete("/profile/me/bank")
+async def cancel_bank_change(user: dict = Depends(get_current_user)):
+    res = await db.bank_change_requests.update_many(
+        {"user_id": user["user_id"], "status": "pending"}, {"$set": {"status": "cancelled", "decided_at": now_utc().isoformat()}}
+    )
+    if not res.modified_count:
+        raise HTTPException(status_code=404, detail="No pending change")
+    return {"ok": True}
+
+@api_router.get("/admin/employees/{user_id}/profile")
+async def admin_employee_profile(user_id: str, user: dict = Depends(require_manager)):
+    await ensure_can_view_sensitive(user, user_id)
+    if not await db.users.find_one({"user_id": user_id}, {"_id": 1}):
+        raise HTTPException(status_code=404, detail="Employee not found")
+    return await load_profile(user_id)
+
+@api_router.put("/admin/employees/{user_id}/profile")
+async def admin_update_employee_profile(user_id: str, payload: ProfileUpdate, user: dict = Depends(require_manager)):
+    await ensure_manages_other(user, user_id)
+    emp = await db.users.find_one({"user_id": user_id}, {"_id": 0, "name": 1})
+    if not emp:
+        raise HTTPException(status_code=404, detail="Employee not found")
+    updates = clean_profile(payload)
+    await save_profile_fields(user_id, updates)
+    await log_activity(user, "profile_updated", emp.get("name", user_id), ", ".join(updates))
+    return await load_profile(user_id)
+
+@api_router.get("/admin/bank-requests")
+async def admin_bank_requests(user: dict = Depends(require_admin)):
+    items = await db.bank_change_requests.find({"status": "pending"}, {"_id": 0}).sort("created_at", 1).to_list(500)
+    current = {
+        p["user_id"]: p.get("bank") for p in await db.employee_profiles.find(
+            {"user_id": {"$in": [i["user_id"] for i in items]}}, {"_id": 0, "user_id": 1, "bank": 1}
+        ).to_list(500)
+    }
+    for i in items:
+        i["current_bank"] = current.get(i["user_id"])
+    return {"requests": items}
+
+@api_router.post("/admin/bank-requests/{request_id}/decide")
+async def admin_decide_bank(request_id: str, payload: BankDecision, user: dict = Depends(require_admin)):
+    if payload.status not in ("approved", "rejected"):
+        raise HTTPException(status_code=400, detail="Status must be approved or rejected")
+    req = await db.bank_change_requests.find_one({"request_id": request_id}, {"_id": 0})
+    if not req:
+        raise HTTPException(status_code=404, detail="Request not found")
+    if req["status"] != "pending":
+        raise HTTPException(status_code=400, detail="Already decided")
+    now_iso = now_utc().isoformat()
+    note = (payload.note or "").strip() or None
+    await db.bank_change_requests.update_one({"request_id": request_id}, {"$set": {
+        "status": payload.status, "decided_at": now_iso, "decided_by": user.get("name"), "note": note,
+    }})
+    if payload.status == "approved":
+        bank = {k: req[k] for k in ("account_holder", "account_number", "ifsc", "bank_name")}
+        await save_profile_fields(req["user_id"], {"bank": {**bank, "approved_at": now_iso, "approved_by": user.get("name")}})
+    await log_activity(user, f"bank_{payload.status}", req.get("user_name", ""), f"{req['ifsc']} ••{req['account_number'][-4:]}")
+    body = f"Account ••{req['account_number'][-4:]} · {req['ifsc']}" + (f"\nNote: {note}" if note else "")
+    spawn_user_push(req["user_id"], {"title": f"Bank details {payload.status}", "body": body, "tag": request_id, "url": "/profile"})
+    return {"ok": True}
+
+def _this_year_occurrence(d: ddate, year: int) -> ddate:
+    try:
+        return d.replace(year=year)
+    except ValueError:
+        return ddate(year, 2, 28)
+
+@api_router.get("/celebrations")
+async def celebrations(days: int = Query(7, ge=0, le=31), user: dict = Depends(get_current_user)):
+    today_d = user_local_today(user)
+    today_d = ddate.fromisoformat(today_d) if isinstance(today_d, str) else today_d
+    profiles = await db.employee_profiles.find(
+        {"$or": [{f: {"$ne": None}} for f in PROFILE_DATE_FIELDS]}, {"_id": 0, "user_id": 1, **{f: 1 for f in PROFILE_DATE_FIELDS}}
+    ).to_list(5000)
+    users = {
+        u["user_id"]: u for u in await db.users.find(
+            {"user_id": {"$in": [p["user_id"] for p in profiles]}},
+            {"_id": 0, "user_id": 1, "name": 1, "avatar_path": 1, "site": 1, "department": 1},
+        ).to_list(5000)
+    }
+    kinds = {"dob": "birthday", "wedding_anniversary": "wedding_anniversary", "date_of_joining": "work_anniversary"}
+    out = []
+    for p in profiles:
+        u = users.get(p["user_id"])
+        if not u:
+            continue
+        for field, kind in kinds.items():
+            if not p.get(field):
+                continue
+            orig = ddate.fromisoformat(p[field])
+            nxt = _this_year_occurrence(orig, today_d.year)
+            if nxt < today_d:
+                nxt = _this_year_occurrence(orig, today_d.year + 1)
+            away = (nxt - today_d).days
+            if away > days:
+                continue
+            years = nxt.year - orig.year
+            if kind == "work_anniversary" and years < 1:
+                continue
+            out.append({
+                "user_id": u["user_id"], "name": u.get("name"), "avatar_path": u.get("avatar_path"),
+                "site": u.get("site"), "department": u.get("department"), "kind": kind,
+                "date": nxt.isoformat(), "days_away": away,
+                "years": years if kind != "birthday" else None, "is_me": u["user_id"] == user["user_id"],
+            })
+    out.sort(key=lambda x: (x["days_away"], x["name"] or ""))
+    return {"today": today_d.isoformat(), "celebrations": out}
 
 @api_router.get("/")
 async def root():

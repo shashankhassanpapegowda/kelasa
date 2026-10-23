@@ -2,8 +2,10 @@ import { useEffect, useMemo, useState } from "react";
 import { api } from "@/lib/api";
 import { toast } from "sonner";
 import AuthPhoto from "@/components/AuthPhoto";
+import BankRequestsPanel from "@/components/admin/BankRequestsPanel";
+import EmployeeProfileModal from "@/components/admin/EmployeeProfileModal";
 import { fmtDuration } from "@/lib/format";
-import { UserPlus, PencilSimple, Trash, X, MagnifyingGlass, Clock as ClockIcon, Buildings, Key } from "@phosphor-icons/react";
+import { UserPlus, PencilSimple, Trash, X, MagnifyingGlass, Clock as ClockIcon, Buildings, Key, IdentificationCard } from "@phosphor-icons/react";
 
 const ROLE_LABEL = { admin: "ADMIN", sub_admin: "SUB-ADMIN", employee: "EMPLOYEE" };
 
@@ -14,6 +16,7 @@ export default function TeamTab({ isAdmin, currentUserId }) {
   const [dept, setDept] = useState("all");
   const [branch, setBranch] = useState("all");
   const [editing, setEditing] = useState(null);
+  const [viewing, setViewing] = useState(null);
   const [adding, setAdding] = useState(false);
   const [passwordFor, setPasswordFor] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -49,6 +52,7 @@ export default function TeamTab({ isAdmin, currentUserId }) {
 
   return (
     <div data-testid="team-tab">
+      {isAdmin && <BankRequestsPanel/>}
       <div className="border border-border bg-card">
         <div className="p-4 border-b border-border flex items-center justify-between gap-3 flex-wrap">
           <div className="flex items-center gap-2">
@@ -84,7 +88,7 @@ export default function TeamTab({ isAdmin, currentUserId }) {
           {filtered.map(emp => (
             <div key={emp.user_id} className="p-4 flex flex-col sm:flex-row sm:items-start gap-3 hover:bg-secondary/40" data-testid={`emp-row-${emp.user_id}`}>
               <div className="flex items-start gap-3 flex-1 min-w-0">
-                <AuthPhoto path={emp.face_photo_path} className="w-10 h-10 rounded-full object-cover border border-border"
+                <AuthPhoto path={emp.avatar_path || emp.face_photo_path} className="w-10 h-10 rounded-full object-cover border border-border"
                   fallback={emp.picture
                     ? <img src={emp.picture} className="w-10 h-10 rounded-full border border-border" alt=""/>
                     : <div className="w-10 h-10 rounded-full bg-secondary grid place-items-center text-sm font-medium">{emp.name?.[0]}</div>}/>
@@ -118,6 +122,9 @@ export default function TeamTab({ isAdmin, currentUserId }) {
               <div className="text-left sm:text-right shrink-0 pl-[52px] sm:pl-0">
                 <div className="font-mono text-sm">{fmtDuration(emp.today_minutes)}</div>
                 <div className="flex items-center gap-2 mt-1 sm:justify-end flex-wrap">
+                  <button onClick={() => setViewing(emp)} className="text-[10px] label-overline hover:text-primary inline-flex items-center gap-1" data-testid={`profile-emp-${emp.user_id}`}>
+                    <IdentificationCard size={11} weight="bold"/> PROFILE
+                  </button>
                   {(isAdmin || emp.user_id !== currentUserId) && (
                     <button onClick={() => setEditing(emp)} className="text-[10px] label-overline hover:text-primary inline-flex items-center gap-1" data-testid={`edit-emp-${emp.user_id}`}>
                       <PencilSimple size={10} weight="bold"/> EDIT
@@ -175,6 +182,7 @@ export default function TeamTab({ isAdmin, currentUserId }) {
           }}/>
       )}
 
+      {viewing && <EmployeeProfileModal emp={viewing} onClose={() => setViewing(null)}/>}
       {editing && (
         <EmployeeEditModal emp={editing} org={org} isAdmin={isAdmin} onClose={() => setEditing(null)}
           onSave={async ({ shift, assignment, role, fieldStaff }) => {

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import AppHeader from "@/components/AppHeader";
+import CelebrationsCard from "@/components/CelebrationsCard";
 import MapView from "@/components/MapView";
 import FaceCapture from "@/components/FaceCapture";
 import AuthPhoto from "@/components/AuthPhoto";
@@ -234,6 +235,7 @@ export default function Dashboard() {
           </div>
 
           {/* Status card */}
+          <CelebrationsCard/>
           {notice && (
             <div className="mt-6 border border-border bg-card p-4 flex items-start gap-3" data-testid="dashboard-notice">
               {notice.pinned ? <PushPin size={16} weight="fill" className="text-primary mt-0.5 shrink-0"/> : <Megaphone size={16} weight="bold" className="text-primary mt-0.5 shrink-0"/>}

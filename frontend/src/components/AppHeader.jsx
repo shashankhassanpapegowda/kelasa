@@ -1,6 +1,7 @@
 import { useAuth } from "@/lib/auth";
+import AuthPhoto from "@/components/AuthPhoto";
 import { Link, useLocation, useNavigate } from "react-router-dom";
-import { SignOut, Gauge, MapTrifold, ChartBar, AirplaneTilt, Lock } from "@phosphor-icons/react";
+import { SignOut, Gauge, MapTrifold, ChartBar, AirplaneTilt, Lock, UserCircle } from "@phosphor-icons/react";
 
 export default function AppHeader() {
   const { user, logout } = useAuth();
@@ -32,22 +33,24 @@ export default function AppHeader() {
           )}
           <NavLink to="/dashboard" current={loc.pathname === "/dashboard"} icon={<MapTrifold size={16} weight="bold"/>} label="My Day" testid="nav-my-day"/>
           <NavLink to="/leave" current={loc.pathname === "/leave"} icon={<AirplaneTilt size={16} weight="bold"/>} label="Leave" testid="nav-leave"/>
+          <NavLink to="/profile" current={loc.pathname === "/profile"} icon={<UserCircle size={16} weight="bold"/>} label="Profile" testid="nav-profile"/>
         </nav>
 
         <div className="flex items-center gap-3">
-          <div className="hidden sm:flex items-center gap-2">
-            {user?.picture ? (
-              <img src={user.picture} alt="" className="w-8 h-8 rounded-full border border-border"/>
-            ) : (
-              <div className="w-8 h-8 rounded-full bg-secondary grid place-items-center text-xs font-medium">
-                {user?.name?.[0]}
-              </div>
-            )}
+          <Link to="/profile" className="hidden sm:flex items-center gap-2" data-testid="header-profile-link">
+            <AuthPhoto key={user?.avatar_path || "none"} path={user?.avatar_path} className="w-8 h-8 rounded-full object-cover border border-border"
+              fallback={user?.picture ? (
+                <img src={user.picture} alt="" className="w-8 h-8 rounded-full border border-border"/>
+              ) : (
+                <div className="w-8 h-8 rounded-full bg-secondary grid place-items-center text-xs font-medium">
+                  {user?.name?.[0]}
+                </div>
+              )}/>
             <div className="leading-tight">
               <div className="text-sm font-medium" data-testid="user-name">{user?.name}</div>
               <div className="text-[10px] label-overline" data-testid="user-role">{String(user?.role || "").replace("_", "-")}</div>
             </div>
-          </div>
+          </Link>
           <Link
             to="/change-password"
             data-testid="nav-change-password"
