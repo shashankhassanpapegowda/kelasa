@@ -115,3 +115,10 @@ Employee attendance and route-tracking app, now expanding into a full **employee
 - track_zone sends a push on the first leave and on each repeat interval (pushed_level), while the employee's phone keeps sending location. Recipients: all admins plus sub-admins whose scope includes the employee. One notification per alert (tag = alert_id).
 - frontend/public/sw.js (push + click opens /admin#live or #alerts), lib/push.js, PhoneAlertsCard on Alerts tab (iPhone: Add to Home Screen first).
 - Tested: iteration_11 (backend 6/6 + 51 regression, frontend 100% with mocked push). Real-phone delivery is not testable in headless.
+
+## 2026-06 — Per-phone sound/silent + employee leave push
+- `push_subscriptions.silent` per device; PATCH /api/push/subscribe {endpoint, silent}; service worker sends silent notifications without vibration.
+- Push endpoints open to all signed-in users. Employees turn notifications on from the Leave page card, or from the offer shown ~2 s after they apply.
+- Leave approve/reject sends the employee "Leave approved/rejected · <type> · dates" plus "Note: <reason>". Tapping it opens /leave.
+- Tested: iteration_12 (18/18 backend, frontend 100%).
+- Known stale test: test_iter6_leave_fixes::test_sub_admin_cannot_decide_out_of_scope (it contradicts the user's choice that any manager can approve any leave).

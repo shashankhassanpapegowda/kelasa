@@ -52,7 +52,7 @@ export default function LeavePage() {
       toast.success("Leave request sent for approval");
       setF({ ...f, reason: "" });
       load();
-      offerPush();
+      setTimeout(offerPush, 1800);
     } catch (e) { toast.error(e?.response?.data?.detail || "Could not submit"); }
     finally { setBusy(false); }
   };

@@ -75,14 +75,13 @@ class TestPushEndpoints:
         r = requests.get(f"{BASE_URL}/api/push/public-key", headers=ADMIN)
         assert r.status_code == 200 and len(r.json()["public_key"]) > 60
         assert requests.get(f"{BASE_URL}/api/push/public-key", headers=SUB).status_code == 200
-        assert requests.get(f"{BASE_URL}/api/push/public-key", headers=emp).status_code == 403
+        assert requests.get(f"{BASE_URL}/api/push/public-key", headers=emp).status_code == 200  # employees allowed since iter12
         assert requests.get(f"{BASE_URL}/api/push/public-key").status_code == 401
 
     def test_subscribe_validation(self, emp):
         s = fake_sub("v")
         assert requests.post(f"{BASE_URL}/api/push/subscribe", json={**s, "endpoint": "http://x.com/a"}, headers=ADMIN).status_code == 400
         assert requests.post(f"{BASE_URL}/api/push/subscribe", json={"endpoint": s["endpoint"]}, headers=ADMIN).status_code == 422
-        assert requests.post(f"{BASE_URL}/api/push/subscribe", json=s, headers=emp).status_code == 403
         assert requests.post(f"{BASE_URL}/api/push/subscribe", json=s).status_code == 401
 
     def test_test_without_devices(self):
