@@ -15,6 +15,8 @@ import httpx
 import requests
 import bcrypt
 import secrets as pysecrets
+import hmac
+from pymongo.errors import DuplicateKeyError
 import re
 import ipaddress
 from html import escape
@@ -212,8 +214,18 @@ class PushDeviceSettings(BaseModel):
     silent: Optional[bool] = None
     leave_updates: Optional[bool] = None
     announcements: Optional[bool] = None
+    celebrations: Optional[bool] = None
+
+class WishIn(BaseModel):
+    to_user_id: str
+    kind: str
+    message: str
+
+class WishReply(BaseModel):
+    message: str
 
 class ProfileUpdate(BaseModel):
+    esi_not_applicable: Optional[bool] = None
     dob: Optional[str] = None
     wedding_anniversary: Optional[str] = None
     date_of_joining: Optional[str] = None
@@ -954,6 +966,8 @@ async def seed_admin_password():
 async def ensure_indexes():
     await db.users.create_index("email", unique=True)
     await db.employee_profiles.create_index("user_id", unique=True)
+    await db.cron_runs.create_index("key", unique=True)
+    await db.wishes.create_index([("to_user_id", 1), ("occasion_date", 1)])
     await db.password_reset_tokens.create_index("expires_at", expireAfterSeconds=0)
     await db.password_reset_tokens.create_index("token", unique=True)
     await db.login_attempts.create_index("identifier", unique=True)
@@ -2273,6 +2287,7 @@ async def push_status(endpoint: Optional[str] = None, user: dict = Depends(get_c
         "devices": devices, "this_device": bool(mine), "silent": bool(mine.get("silent")),
         "leave_updates": mine.get("leave_updates", True) is not False,
         "announcements": mine.get("announcements", True) is not False,
+        "celebrations": mine.get("celebrations", True) is not False,
     }
 
 @api_router.patch("/push/subscribe")
@@ -2539,6 +2554,10 @@ def clean_profile(payload: ProfileUpdate, today_iso: str) -> dict:
         if v and not re.fullmatch(r"\d{10}|\d{17}", v):
             raise HTTPException(status_code=400, detail="ESI number must be 10 or 17 digits")
         out["esi"] = v or None
+    if data.get("esi_not_applicable") is not None:
+        out["esi_not_applicable"] = bool(data["esi_not_applicable"])
+        if out["esi_not_applicable"]:
+            out["esi"] = None
     return out
 
 def clean_bank(payload: BankDetailsIn) -> dict:
@@ -2702,10 +2721,10 @@ def _this_year_occurrence(d: ddate, year: int) -> ddate:
     except ValueError:
         return ddate(year, 2, 28)
 
-@api_router.get("/celebrations")
-async def celebrations(days: int = Query(7, ge=0, le=31), user: dict = Depends(get_current_user)):
-    today_d = user_local_today(user)
-    today_d = ddate.fromisoformat(today_d) if isinstance(today_d, str) else today_d
+CELEBRATION_KINDS = {"dob": "birthday", "wedding_anniversary": "wedding_anniversary", "date_of_joining": "work_anniversary"}
+KIND_LABEL = {"birthday": "birthday", "wedding_anniversary": "wedding anniversary", "work_anniversary": "work anniversary"}
+
+async def compute_celebrations(today_d: ddate, days: int, back: int = 0) -> List[dict]:
     profiles = await db.employee_profiles.find(
         {"$or": [{f: {"$ne": None}} for f in PROFILE_DATE_FIELDS]}, {"_id": 0, "user_id": 1, **{f: 1 for f in PROFILE_DATE_FIELDS}}
     ).to_list(5000)
@@ -2715,19 +2734,19 @@ async def celebrations(days: int = Query(7, ge=0, le=31), user: dict = Depends(g
             {"_id": 0, "user_id": 1, "name": 1, "avatar_path": 1, "site": 1, "department": 1},
         ).to_list(5000)
     }
-    kinds = {"dob": "birthday", "wedding_anniversary": "wedding_anniversary", "date_of_joining": "work_anniversary"}
+    start = today_d - timedelta(days=back)
     out = []
     for p in profiles:
         u = users.get(p["user_id"])
         if not u:
             continue
-        for field, kind in kinds.items():
+        for field, kind in CELEBRATION_KINDS.items():
             if not p.get(field):
                 continue
             orig = ddate.fromisoformat(p[field])
-            nxt = _this_year_occurrence(orig, today_d.year)
-            if nxt < today_d:
-                nxt = _this_year_occurrence(orig, today_d.year + 1)
+            nxt = _this_year_occurrence(orig, start.year)
+            if nxt < start:
+                nxt = _this_year_occurrence(orig, start.year + 1)
             away = (nxt - today_d).days
             if away > days:
                 continue
@@ -2737,11 +2756,219 @@ async def celebrations(days: int = Query(7, ge=0, le=31), user: dict = Depends(g
             out.append({
                 "user_id": u["user_id"], "name": u.get("name"), "avatar_path": u.get("avatar_path"),
                 "site": u.get("site"), "department": u.get("department"), "kind": kind,
-                "date": nxt.isoformat(), "days_away": away,
-                "years": years if kind != "birthday" else None, "is_me": u["user_id"] == user["user_id"],
+                "date": nxt.isoformat(), "days_away": away, "years": years if kind != "birthday" else None,
             })
     out.sort(key=lambda x: (x["days_away"], x["name"] or ""))
-    return {"today": today_d.isoformat(), "celebrations": out}
+    return out
+
+def local_today_date(user: Optional[dict] = None) -> ddate:
+    t = user_local_today(user or {})
+    return ddate.fromisoformat(t) if isinstance(t, str) else t
+
+@api_router.get("/celebrations")
+async def celebrations(days: int = Query(7, ge=0, le=31), user: dict = Depends(get_current_user)):
+    today_d = local_today_date(user)
+    items = await compute_celebrations(today_d, days)
+    mine_sent = await db.wishes.find(
+        {"from_user_id": user["user_id"], "occasion_date": {"$in": list({c["date"] for c in items})}},
+        {"_id": 0, "to_user_id": 1, "kind": 1, "occasion_date": 1, "wish_id": 1},
+    ).to_list(500)
+    sent = {(w["to_user_id"], w["kind"], w["occasion_date"]): w["wish_id"] for w in mine_sent}
+    for c in items:
+        c["is_me"] = c["user_id"] == user["user_id"]
+        c["my_wish_id"] = sent.get((c["user_id"], c["kind"], c["date"]))
+        if c["is_me"]:
+            c["wish_count"] = await db.wishes.count_documents(
+                {"to_user_id": user["user_id"], "kind": c["kind"], "occasion_date": c["date"]}
+            )
+    return {"today": today_d.isoformat(), "celebrations": items}
+
+# ---------- Wishes (private threads) ----------
+WISH_MAX = 500
+
+def _wish_view(w: dict, me: str) -> dict:
+    mine_is_to = w["to_user_id"] == me
+    w["direction"] = "received" if mine_is_to else "sent"
+    w["unread"] = not w.get("read_by_to" if mine_is_to else "read_by_from", False)
+    return w
+
+async def push_wish(user_id: str, payload: dict):
+    subs = await db.push_subscriptions.find({"user_id": user_id, "celebrations": {"$ne": False}}, {"_id": 0}).to_list(50)
+    if subs:
+        await push_to_subscriptions(subs, payload)
+
+@api_router.post("/wishes")
+async def send_wish(payload: WishIn, user: dict = Depends(get_current_user)):
+    msg = payload.message.strip()
+    if not msg:
+        raise HTTPException(status_code=400, detail="Write a message")
+    if len(msg) > WISH_MAX:
+        raise HTTPException(status_code=400, detail=f"Keep it under {WISH_MAX} characters")
+    if payload.to_user_id == user["user_id"]:
+        raise HTTPException(status_code=400, detail="You can't wish yourself")
+    today_d = local_today_date(user)
+    occasion = next((c for c in await compute_celebrations(today_d, 7, back=3)
+                     if c["user_id"] == payload.to_user_id and c["kind"] == payload.kind), None)
+    if not occasion:
+        raise HTTPException(status_code=400, detail="There's no celebration to wish them for right now")
+    existing = await db.wishes.find_one(
+        {"from_user_id": user["user_id"], "to_user_id": payload.to_user_id, "kind": payload.kind, "occasion_date": occasion["date"]},
+        {"_id": 0},
+    )
+    if existing:
+        raise HTTPException(status_code=400, detail="You already sent a wish — reply in the conversation instead")
+    now_iso = now_utc().isoformat()
+    doc = {
+        "wish_id": f"wish_{uuid.uuid4().hex[:12]}", "to_user_id": payload.to_user_id, "to_name": occasion["name"],
+        "from_user_id": user["user_id"], "from_name": user.get("name"), "kind": payload.kind,
+        "occasion_date": occasion["date"], "years": occasion.get("years"),
+        "messages": [{"from_user_id": user["user_id"], "from_name": user.get("name"), "message": msg, "created_at": now_iso}],
+        "created_at": now_iso, "updated_at": now_iso, "read_by_from": True, "read_by_to": False,
+    }
+    await db.wishes.insert_one(dict(doc))
+    _track(asyncio.create_task(push_wish(payload.to_user_id, {
+        "title": f"{user.get('name')} sent you a {KIND_LABEL[payload.kind]} wish",
+        "body": msg[:180], "tag": doc["wish_id"], "url": "/wishes",
+    })))
+    return {"ok": True, "wish": _wish_view(doc, user["user_id"])}
+
+@api_router.get("/wishes")
+async def my_wishes(user: dict = Depends(get_current_user)):
+    me = user["user_id"]
+    docs = await db.wishes.find({"$or": [{"to_user_id": me}, {"from_user_id": me}]}, {"_id": 0}).sort("updated_at", -1).to_list(500)
+    items = [_wish_view(w, me) for w in docs]
+    return {"wishes": items, "unread": sum(1 for w in items if w["unread"])}
+
+@api_router.get("/wishes/unread-count")
+async def wishes_unread(user: dict = Depends(get_current_user)):
+    me = user["user_id"]
+    n = await db.wishes.count_documents({"$or": [
+        {"to_user_id": me, "read_by_to": False}, {"from_user_id": me, "read_by_from": False},
+    ]})
+    return {"unread": n}
+
+async def _wish_for_participant(wish_id: str, me: str) -> dict:
+    w = await db.wishes.find_one({"wish_id": wish_id}, {"_id": 0})
+    if not w or me not in (w["to_user_id"], w["from_user_id"]):
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    return w
+
+@api_router.post("/wishes/{wish_id}/read")
+async def read_wish(wish_id: str, user: dict = Depends(get_current_user)):
+    w = await _wish_for_participant(wish_id, user["user_id"])
+    field = "read_by_to" if w["to_user_id"] == user["user_id"] else "read_by_from"
+    await db.wishes.update_one({"wish_id": wish_id}, {"$set": {field: True}})
+    return {"ok": True}
+
+@api_router.post("/wishes/{wish_id}/reply")
+async def reply_wish(wish_id: str, payload: WishReply, user: dict = Depends(get_current_user)):
+    msg = payload.message.strip()
+    if not msg:
+        raise HTTPException(status_code=400, detail="Write a message")
+    if len(msg) > WISH_MAX:
+        raise HTTPException(status_code=400, detail=f"Keep it under {WISH_MAX} characters")
+    w = await _wish_for_participant(wish_id, user["user_id"])
+    now_iso = now_utc().isoformat()
+    i_am_to = w["to_user_id"] == user["user_id"]
+    entry = {"from_user_id": user["user_id"], "from_name": user.get("name"), "message": msg, "created_at": now_iso}
+    await db.wishes.update_one({"wish_id": wish_id}, {
+        "$push": {"messages": entry},
+        "$set": {"updated_at": now_iso, "read_by_to": i_am_to, "read_by_from": not i_am_to},
+    })
+    other = w["from_user_id"] if i_am_to else w["to_user_id"]
+    _track(asyncio.create_task(push_wish(other, {
+        "title": f"{user.get('name')} replied", "body": msg[:180], "tag": wish_id, "url": "/wishes",
+    })))
+    return {"ok": True, "message": entry}
+
+# ---------- Morning celebrations cron ----------
+def _cron_authorized(request: Request) -> bool:
+    expected = os.environ["WEBHOOK_CRON_SECRET"]
+    header = request.headers.get("Authorization", "")
+    if not header.startswith("Bearer "):
+        return False
+    return hmac.compare_digest(header[7:].encode(), expected.encode())
+
+def _names(items: List[dict]) -> str:
+    parts = []
+    for c in items:
+        first = (c["name"] or "").split(" ")[0]
+        parts.append(f"{first}'s birthday" if c["kind"] == "birthday" else f"{first}'s {c['years']}-yr {KIND_LABEL[c['kind']]}")
+    return ", ".join(parts[:-1]) + f" and {parts[-1]}" if len(parts) > 1 else parts[0]
+
+async def run_morning_celebrations(day_key: str):
+    today_d = ddate.fromisoformat(day_key)
+    items = [c for c in await compute_celebrations(today_d, 0)]
+    if not items:
+        await db.cron_runs.update_one({"key": f"celebrations-{day_key}"}, {"$set": {"status": "nothing_today", "sent": 0}})
+        return
+    subs = await db.push_subscriptions.find({"celebrations": {"$ne": False}}, {"_id": 0}).to_list(5000)
+    by_user: dict = {}
+    for sub in subs:
+        by_user.setdefault(sub["user_id"], []).append(sub)
+    sent = 0
+    for uid, user_subs in by_user.items():
+        mine = [c for c in items if c["user_id"] == uid]
+        others = [c for c in items if c["user_id"] != uid]
+        if mine:
+            first = (mine[0]["name"] or "").split(" ")[0]
+            title = f"Happy birthday, {first}!" if mine[0]["kind"] == "birthday" else f"Happy {KIND_LABEL[mine[0]['kind']]}, {first}!"
+            body = "Wishing you a wonderful day from all of us." + (f" Also today: {_names(others)}." if others else "")
+        else:
+            title = "Celebrations today"
+            body = f"Today: {_names(others)}. Tap to send a wish."
+        sent += await push_to_subscriptions(user_subs, {"title": title, "body": body, "tag": f"celebrations-{day_key}", "url": "/dashboard"})
+    await db.cron_runs.update_one({"key": f"celebrations-{day_key}"}, {"$set": {"status": "done", "sent": sent, "celebrations": len(items)}})
+
+@api_router.post("/cron/celebrations")
+async def cron_celebrations(request: Request):
+    # Cron endpoints must ack 2xx immediately; enqueue/background the actual work.
+    if not _cron_authorized(request):
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    try:
+        envelope = await request.json()
+    except ValueError:
+        envelope = None
+    if envelope is not None and not isinstance(envelope, dict):
+        raise HTTPException(status_code=400, detail="Invalid body")
+    run_id = request.headers.get("X-Webhook-Id") or (envelope or {}).get("run_id") or uuid.uuid4().hex
+    day_key = datetime.now(ZoneInfo(DEFAULT_TZ)).date().isoformat()
+    try:
+        await db.cron_runs.insert_one({"key": f"celebrations-{day_key}", "run_id": run_id, "status": "queued", "created_at": now_utc().isoformat()})
+    except DuplicateKeyError:
+        return {"ok": True, "duplicate": True}
+    _track(asyncio.create_task(run_morning_celebrations(day_key)))
+    return {"ok": True, "queued": day_key}
+
+# ---------- Payroll details export ----------
+@api_router.get("/admin/reports/payroll-details.csv")
+async def payroll_details_csv(request: Request, auth: Optional[str] = Query(None)):
+    u = await manager_from_request(request, auth)
+    ids = await scoped_user_ids(u)
+    users = await db.users.find(
+        user_filter(ids),
+        {"_id": 0, "user_id": 1, "name": 1, "email": 1, "site": 1, "department": 1, "role": 1},
+    ).sort("name", 1).to_list(5000)
+    profiles = {p["user_id"]: p for p in await db.employee_profiles.find(
+        {"user_id": {"$in": [x["user_id"] for x in users]}}, {"_id": 0}).to_list(5000)}
+    pending = {r["user_id"] for r in await db.bank_change_requests.find({"status": "pending"}, {"_id": 0, "user_id": 1}).to_list(5000)}
+    rows = []
+    for x in users:
+        p = profiles.get(x["user_id"], {})
+        bank = p.get("bank") or {}
+        esi = "Not applicable" if p.get("esi_not_applicable") else (p.get("esi") or "")
+        rows.append([
+            x["user_id"], x.get("name", ""), x.get("email", ""), x.get("site") or "", x.get("department") or "",
+            p.get("date_of_joining") or "", bank.get("account_holder", ""),
+            bank.get("account_number", ""), bank.get("ifsc", ""), bank.get("bank_name") or "",
+            p.get("uan") or "", esi,
+            "Change pending approval" if x["user_id"] in pending else ("Approved" if bank else "Missing"),
+        ])
+    await log_activity(u, "payroll_export", "Payroll details", f"{len(rows)} employees")
+    return csv_response([
+        "Employee ID", "Name", "Email", "Branch", "Department", "Joining Date", "Account Holder",
+        "Account Number", "IFSC", "Bank Name", "EPF UAN", "ESI Number", "Bank Status",
+    ], rows, f"payroll_details_{local_today_date(u).isoformat()}.csv")
 
 @api_router.get("/")
 async def root():

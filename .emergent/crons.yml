@@ -1,0 +1,9 @@
+crons:
+  - name: morning-celebrations
+    description: "Sends the 8am IST phone notification about today's birthdays and anniversaries"
+    cron: "0 8 * * *"
+    timezone: "Asia/Kolkata"
+    endpoint: "{{BASE_URL}}/api/cron/celebrations"
+    method: POST
+    # Cron endpoints must ack 2xx immediately; enqueue/background the actual work.
+    enabled: true

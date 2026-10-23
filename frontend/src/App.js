@@ -10,6 +10,7 @@ import FaceEnroll from "@/pages/FaceEnroll";
 import Reports from "@/pages/Reports";
 import LeavePage from "@/pages/LeavePage";
 import ProfilePage from "@/pages/ProfilePage";
+import WishesPage from "@/pages/WishesPage";
 import ChangePassword from "@/pages/ChangePassword";
 import ResetPassword from "@/pages/ResetPassword";
 
@@ -57,6 +58,7 @@ function AppRouter() {
       <Route path="/dashboard" element={<ProtectedRoute><Dashboard/></ProtectedRoute>}/>
       <Route path="/leave" element={<ProtectedRoute><LeavePage/></ProtectedRoute>}/>
       <Route path="/profile" element={<ProtectedRoute><ProfilePage/></ProtectedRoute>}/>
+      <Route path="/wishes" element={<ProtectedRoute><WishesPage/></ProtectedRoute>}/>
       <Route path="/admin" element={<ProtectedRoute managerOnly><AdminPanel/></ProtectedRoute>}/>
       <Route path="/admin/reports" element={<ProtectedRoute managerOnly><Reports/></ProtectedRoute>}/>
       <Route path="*" element={<Navigate to="/" replace/>}/>

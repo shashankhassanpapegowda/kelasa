@@ -38,7 +38,7 @@ export default function EmployeeProfileModal({ emp, onClose }) {
             </div>
             <div className="grid grid-cols-2 gap-3" data-testid="employee-profile-statutory">
               <div><div className="label-overline mb-1">EPF UAN</div><span className="font-mono">{p.uan || "—"}</span></div>
-              <div><div className="label-overline mb-1">ESI Number</div><span className="font-mono">{p.esi || "—"}</span></div>
+              <div><div className="label-overline mb-1">ESI Number</div><span className="font-mono">{p.esi_not_applicable ? "Not applicable" : p.esi || "—"}</span></div>
             </div>
             <div className="border-t border-border pt-4">
               <div className="label-overline mb-3">Bank Account</div>

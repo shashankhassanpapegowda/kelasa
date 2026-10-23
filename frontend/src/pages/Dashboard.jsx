@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import AppHeader from "@/components/AppHeader";
 import CelebrationsCard from "@/components/CelebrationsCard";
+import ProfileNudge from "@/components/ProfileNudge";
 import MapView from "@/components/MapView";
 import FaceCapture from "@/components/FaceCapture";
 import AuthPhoto from "@/components/AuthPhoto";
@@ -65,6 +66,7 @@ export default function Dashboard() {
   const [livePos, setLivePos] = useState(null);
   const [notice, setNotice] = useState(null);
   const [fence, setFence] = useState(null);
+  const [profile, setProfile] = useState(null);
   const [zone, setZone] = useState(null);
   const pingTimer = useRef(null);
   const tickTimer = useRef(null);
@@ -91,6 +93,7 @@ export default function Dashboard() {
 
   useEffect(() => {
     api.get("/attendance/geofence").then(r => setFence(r.data)).catch(() => {});
+    api.get("/profile/me").then(r => setProfile(r.data)).catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -235,7 +238,6 @@ export default function Dashboard() {
           </div>
 
           {/* Status card */}
-          <CelebrationsCard/>
           {notice && (
             <div className="mt-6 border border-border bg-card p-4 flex items-start gap-3" data-testid="dashboard-notice">
               {notice.pinned ? <PushPin size={16} weight="fill" className="text-primary mt-0.5 shrink-0"/> : <Megaphone size={16} weight="bold" className="text-primary mt-0.5 shrink-0"/>}
@@ -339,6 +341,9 @@ export default function Dashboard() {
               <Stat label="Pings Logged" value={pings.length} testid="stat-pings" full/>
             </div>
           </div>
+
+          <ProfileNudge profile={profile}/>
+          <CelebrationsCard/>
 
           {/* Map + history */}
           <div className="mt-6 grid lg:grid-cols-3 gap-0 border border-border bg-card">

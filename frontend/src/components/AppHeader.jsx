@@ -1,11 +1,21 @@
+import { useEffect, useState } from "react";
 import { useAuth } from "@/lib/auth";
+import { api } from "@/lib/api";
 import AuthPhoto from "@/components/AuthPhoto";
 import { Link, useLocation, useNavigate } from "react-router-dom";
-import { SignOut, Gauge, MapTrifold, ChartBar, AirplaneTilt, Lock, UserCircle } from "@phosphor-icons/react";
+import { SignOut, Gauge, MapTrifold, ChartBar, AirplaneTilt, Lock, UserCircle, HandHeart } from "@phosphor-icons/react";
 
 export default function AppHeader() {
   const { user, logout } = useAuth();
   const loc = useLocation();
+  const [unread, setUnread] = useState(0);
+  useEffect(() => {
+    const load = () => api.get("/wishes/unread-count").then(r => setUnread(r.data.unread || 0)).catch(() => {});
+    load();
+    const id = setInterval(load, 60000);
+    window.addEventListener("kelasa-wishes-read", load);
+    return () => { clearInterval(id); window.removeEventListener("kelasa-wishes-read", load); };
+  }, [loc.pathname]);
   const navigate = useNavigate();
   const isManager = user?.role === "admin" || user?.role === "sub_admin";
 
@@ -33,6 +43,7 @@ export default function AppHeader() {
           )}
           <NavLink to="/dashboard" current={loc.pathname === "/dashboard"} icon={<MapTrifold size={16} weight="bold"/>} label="My Day" testid="nav-my-day"/>
           <NavLink to="/leave" current={loc.pathname === "/leave"} icon={<AirplaneTilt size={16} weight="bold"/>} label="Leave" testid="nav-leave"/>
+          <NavLink to="/wishes" current={loc.pathname === "/wishes"} icon={<span className="relative"><HandHeart size={16} weight="bold"/>{unread > 0 && <span className="absolute -top-1.5 -right-2 min-w-[14px] h-[14px] px-0.5 rounded-full bg-[#FF3B30] text-white text-[9px] font-mono grid place-items-center" data-testid="wishes-unread-badge">{unread}</span>}</span>} label="Wishes" testid="nav-wishes"/>
           <NavLink to="/profile" current={loc.pathname === "/profile"} icon={<UserCircle size={16} weight="bold"/>} label="Profile" testid="nav-profile"/>
         </nav>
 

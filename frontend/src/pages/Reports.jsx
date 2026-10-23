@@ -54,6 +54,17 @@ export default function Reports() {
     overBreak: acc.overBreak + r.over_break_days,
   }), { present: 0, absent: 0, late: 0, work: 0, breakM: 0, overBreak: 0 });
 
+  const downloadPayroll = async () => {
+    try {
+      const res = await api.get("/admin/reports/payroll-details.csv", { responseType: "blob" });
+      const url = URL.createObjectURL(res.data);
+      const a = document.createElement("a");
+      a.href = url; a.download = `payroll_details_${new Date().toLocaleDateString("en-CA")}.csv`; a.click();
+      URL.revokeObjectURL(url);
+      toast.success("Payroll details downloaded");
+    } catch { toast.error("Download failed"); }
+  };
+
   const downloadCsv = async () => {
     try {
       const path = { branches: "/admin/reports/punches.csv", alerts: "/admin/geofence-alerts/history.csv" }[view] || "/admin/reports.csv";
@@ -93,6 +104,9 @@ export default function Reports() {
                   className="bg-card border border-border px-2 py-1.5 text-sm font-mono"/>
               </label>
               <button onClick={load} className="border border-border bg-card px-3 py-1.5 text-sm hover:bg-secondary" data-testid="apply-range">Apply</button>
+              <button onClick={downloadPayroll} className="border border-border bg-card px-3 py-1.5 text-sm inline-flex items-center gap-2 hover:border-foreground" data-testid="download-payroll">
+                <Download size={14} weight="bold"/> Payroll Details
+              </button>
               <button onClick={downloadCsv} className="bg-foreground text-background px-3 py-1.5 text-sm inline-flex items-center gap-2 hover:bg-primary" data-testid="download-csv">
                 <Download size={14} weight="bold"/> {{ branches: "Punch Log CSV", alerts: "Left-Area CSV" }[view] || "CSV"}
               </button>
