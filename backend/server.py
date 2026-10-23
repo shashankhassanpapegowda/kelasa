@@ -1,4 +1,4 @@
-from fastapi import FastAPI, APIRouter, HTTPException, Request, Response, Depends, Query
+from fastapi import FastAPI, APIRouter, HTTPException, Request, Response, Depends, Query, BackgroundTasks
 from fastapi.responses import StreamingResponse
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
@@ -287,6 +287,10 @@ async def get_current_user(request: Request) -> dict:
     if not user:
         raise HTTPException(status_code=401, detail="User not found")
     user.pop("password_hash", None)
+    if user.get("must_change_password") and request.url.path not in (
+        "/api/auth/me", "/api/auth/change-password", "/api/auth/logout",
+    ):
+        raise HTTPException(status_code=403, detail="Set your own password before continuing")
     return user
 
 async def require_admin(user: dict = Depends(get_current_user)) -> dict:
@@ -324,9 +328,13 @@ async def ensure_in_scope(actor: dict, target_user_id: str):
         raise HTTPException(status_code=403, detail="This employee is not in your team")
 
 async def ensure_manages_other(actor: dict, target_user_id: str):
-    """Scope check that also stops a sub-admin editing their own record."""
-    if actor.get("role") != "admin" and target_user_id == actor["user_id"]:
-        raise HTTPException(status_code=403, detail="Only an admin can change your own settings")
+    """Scope check that also stops a sub-admin editing their own record or another manager."""
+    if actor.get("role") != "admin":
+        if target_user_id == actor["user_id"]:
+            raise HTTPException(status_code=403, detail="Only an admin can change your own settings")
+        target = await db.users.find_one({"user_id": target_user_id}, {"_id": 0, "role": 1})
+        if target and target.get("role") in ("admin", "sub_admin"):
+            raise HTTPException(status_code=403, detail="Only an admin can manage another admin")
     await ensure_in_scope(actor, target_user_id)
 
 async def log_activity(actor: dict, action: str, target_name: str = "", details: str = ""):
@@ -417,6 +425,10 @@ async def get_me(user: dict = Depends(get_current_user)):
 @api_router.post("/auth/logout")
 async def logout(request: Request, response: Response):
     token = request.cookies.get("session_token")
+    if not token:
+        auth_header = request.headers.get("Authorization", "")
+        if auth_header.startswith("Bearer "):
+            token = auth_header[7:]
     if token:
         await db.user_sessions.delete_one({"session_token": token})
     response.delete_cookie("session_token", path="/")
@@ -543,7 +555,7 @@ def verify_password(plain: str, hashed: str) -> bool:
         return False
 
 def validate_password(password: str) -> str:
-    pw = (password or "").strip()
+    pw = password or ""
     if len(pw) < MIN_PASSWORD_LENGTH:
         raise HTTPException(status_code=400, detail=f"Password must be at least {MIN_PASSWORD_LENGTH} characters")
     return pw
@@ -583,9 +595,12 @@ async def register_failed_attempt(identifier: str, limit: int = MAX_LOGIN_ATTEMP
     await db.login_attempts.update_one({"identifier": identifier}, {"$set": update}, upsert=True)
 
 def client_ip(request: Request) -> str:
+    """Last X-Forwarded-For hop is the one added by our own proxy, so it can't be spoofed."""
     fwd = request.headers.get("x-forwarded-for", "")
     if fwd:
-        return fwd.split(",")[0].strip()
+        parts = [p.strip() for p in fwd.split(",") if p.strip()]
+        if parts:
+            return parts[-1]
     return request.client.host if request.client else "unknown"
 
 @api_router.post("/auth/login")
@@ -609,7 +624,7 @@ async def password_login(payload: PasswordLogin, request: Request, response: Res
     return {"user": user_doc, "session_token": token}
 
 @api_router.post("/auth/change-password")
-async def change_password(payload: PasswordChange, user: dict = Depends(get_current_user)):
+async def change_password(payload: PasswordChange, request: Request, user: dict = Depends(get_current_user)):
     record = await db.users.find_one({"user_id": user["user_id"]}, {"_id": 0, "password_hash": 1})
     current_hash = (record or {}).get("password_hash")
     if current_hash and not verify_password(payload.current_password, current_hash):
@@ -622,10 +637,16 @@ async def change_password(payload: PasswordChange, user: dict = Depends(get_curr
         "must_change_password": False,
         "password_set_at": now_utc().isoformat(),
     }})
+    current_token = request.cookies.get("session_token")
+    if not current_token:
+        auth_header = request.headers.get("Authorization", "")
+        if auth_header.startswith("Bearer "):
+            current_token = auth_header[7:]
+    await db.user_sessions.delete_many({"user_id": user["user_id"], "session_token": {"$ne": current_token}})
     return {"ok": True}
 
 @api_router.post("/auth/forgot-password")
-async def forgot_password(payload: ForgotPassword):
+async def forgot_password(payload: ForgotPassword, background: BackgroundTasks):
     email = payload.email.strip().lower()
     user = await db.users.find_one({"email": email}, {"_id": 0, "user_id": 1, "name": 1, "email": 1})
     if user:
@@ -652,10 +673,12 @@ async def forgot_password(payload: ForgotPassword):
             'We never ask for your password or card details by email.</p>'
             '</td></tr></table>'
         )
-        try:
-            await send_email(to=user["email"], subject=f"Reset your {EMAIL_FROM_NAME} password", html=html)
-        except HTTPException as e:
-            logger.error(f"Password reset email failed for {email}: {e.detail}")
+        async def deliver():
+            try:
+                await send_email(to=user["email"], subject=f"Reset your {EMAIL_FROM_NAME} password", html=html)
+            except HTTPException as e:
+                logger.error(f"Password reset email failed for {email}: {e.detail}")
+        background.add_task(deliver)
     return {"ok": True, "message": "If that email is registered, a reset link is on its way."}
 
 @api_router.post("/auth/reset-password")

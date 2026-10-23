@@ -1,0 +1,51 @@
+{
+  "summary": "Iteration 7 - email+password auth. Backend: 16/16 pytest pass (login, cookie flags, case-insensitive email, same error for wrong pw/unknown/no-password user, 5-fail lockout 429 + success clears counter, CORS creds, admin-created temp password + forced change, admin reset kills sessions + password_set activity log, sub-admin 403 self/out-of-scope, forgot-password always ok + single 1h token, reset single-use/expired/unknown 400, no password_hash leakage, bcrypt $2b$, legacy session tokens via Bearer+cookie). Frontend: login page (no Google), inline errors, forgot flow, Ravi->/dashboard + reload persists, admin->/admin, all 8 admin tabs load, Team NO PASSWORD/TEMP PASSWORD tags, add employee with first password, RESET PASSWORD modal (short pw validation), forced /change-password blocks /dashboard,/leave,/admin, mismatch/wrong-current/reuse errors, header Password change, reset-password page (no token, bogus, mismatch, valid, reuse), /leave apply regression. Found and FIXED 1 critical frontend bug (reset link bounced logged-out users to /). Found 1 HIGH security bug (sub-admin can set an ADMIN's password) and 1 HIGH config gap (owner admin has no password, ADMIN_PASSWORD not set).",
+  "backend_issues": {
+    "critical": [
+      {"endpoint": "PATCH /api/admin/employees/{id}/password", "issue": "Privilege escalation: a sub_admin can set the password of an ADMIN (or another sub_admin) who is in their scope (same department/site/manager). Reproduced: admin created in 'Field Operations' -> test_session_subadmin_001 PATCHed password -> 200 -> logged in as that admin (role=admin). ensure_manages_other only blocks self + out-of-scope. Fix: if actor is sub_admin, reject targets whose role is admin or sub_admin (403). Same check probably needed for edit/delete/reset-face.", "priority": "HIGH"},
+      {"endpoint": "startup seed_admin_password()", "issue": "ADMIN_PASSWORD is not in backend/.env (only ADMIN_EMAIL), so seeding is skipped. Real owner shashank@gtgroups.in has NO password (Team tab shows NO PASSWORD) and Google sign-in is removed; forgot-password email is blocked by insufficient_credits -> the owner currently cannot sign in by any UI path. Set ADMIN_PASSWORD (or have an admin set it) and confirm.", "priority": "HIGH"}
+    ],
+    "minor": [
+      {"endpoint": "all authenticated endpoints", "issue": "must_change_password is enforced only in the frontend router. A temp-password session can call any API (e.g. /api/attendance/today, /api/announcements returned 200). Consider rejecting non-auth endpoints with 403 while must_change_password is true."},
+      {"endpoint": "POST /api/auth/login", "issue": "Per-IP lockout uses the first X-Forwarded-For value, which the client controls: 8 failures with spoofed XFF never hit 429 (only the per-email 10 limit stops it). Use the last/trusted proxy hop."},
+      {"endpoint": "validate_password()", "issue": "Password is .strip()ped before hashing on set/reset/change, but login verifies the raw input. A password set as '  Spaced@123  ' cannot be used exactly as typed (401), only stripped (200). Either don't strip or strip consistently in login."},
+      {"endpoint": "POST /api/auth/change-password", "issue": "Voluntary password change does not revoke the user's other sessions (other session still 200 afterwards). Admin reset and email reset do revoke."},
+      {"endpoint": "POST /api/auth/logout", "issue": "Only deletes the cookie session; a Bearer-only logout leaves the session valid (frontend clears localStorage, so low impact)."},
+      {"endpoint": "POST /api/auth/forgot-password", "issue": "Email send is awaited inline, so response time differs for real vs unknown emails (timing-based enumeration). Consider background task."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "lib/api.js 401 interceptor", "issue": "FIXED BY TESTER: AuthProvider calls /auth/me on load; for a logged-out user it 401s and the global handler did window.location.replace('/') for any path != '/'. Result: opening the emailed /reset-password?token=... link while signed out bounced straight to the login page, so the whole forgot-password flow was unusable. Added 'me' to the isAuthAttempt regex. Verified reset page now stays and the full valid-token flow works.", "selector": "[data-testid=reset-password-page]", "priority": "CRITICAL"}
+    ],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Team > Add Employee modal", "issues": ["Subtitle still says 'Create their record now, they sign in with Google later' (TeamTab.jsx:252) - stale copy now that Google is removed", "First Password is optional; an employee added without it gets NO PASSWORD and can't sign in (email reset is blocked). Consider requiring it or warning."]},
+      {"screen": "/leave", "issues": ["Shows 'No leave types configured yet.' / 'Nothing posted yet.' empty states for ~1-2s while data loads instead of a loading state"]},
+      {"screen": "/leave (regression, pre-existing)", "issues": ["leave-start/leave-end use native <input type=date> instead of shadcn calendar"]}
+    ]
+  },
+  "test_report_links": ["/app/backend/tests/test_password_auth.py", "/app/backend/tests/probe_iter7.py", "/app/test_reports/pytest/pytest_iter7.xml"],
+  "action_items": [
+    "HIGH: block sub_admin from setting passwords (and editing/deleting) for admin/sub_admin accounts in admin_set_password / ensure_manages_other",
+    "HIGH: set ADMIN_PASSWORD so shashank@gtgroups.in can log in (currently no password, no Google button, email blocked)",
+    "Review tester fix in /app/frontend/src/lib/api.js (/auth/me excluded from the global 401 redirect)",
+    "Update Add Employee subtitle copy (remove 'sign in with Google later'); consider making First Password required",
+    "Optional hardening: server-side must_change_password gate, trusted XFF hop for lockout, consistent password stripping, revoke other sessions on change-password, bearer logout"
+  ],
+  "critical_code_review_comments": [
+    "server.py is ~1900 lines - split auth/email/admin/leave into routers",
+    "ensure_manages_other does not consider target role -> sub-admin can take over admin accounts",
+    "must_change_password is purely a UI gate",
+    "client_ip trusts first X-Forwarded-For entry",
+    "validate_password strips but login does not"
+  ],
+  "updated_files": ["/app/frontend/src/lib/api.js", "/app/backend/tests/test_password_auth.py", "/app/backend/tests/probe_iter7.py"],
+  "success_rate": {"backend": "100% of feature tests (16/16); 2 security/config issues found via probes", "frontend": "95% (1 critical bug found and fixed by tester, re-verified)"},
+  "test_credentials": "Ravi emp1.test@gtgroups.local / RaviReset@26 (unchanged). Tester SET admin.test@gtgroups.local password = AdminTest@26 (must_change_password set false in DB). sub.test@gtgroups.local still has no password. Admin password reset killed test_session_admin_001; tester re-inserted it (and test_session_emp_001, which was missing at start). All 3 test_session_* tokens valid.",
+  "seed_data_creation": "Temporary TEST_ employees created and deleted (test_ui_newbie, test_pw_*, test_adm_*, test_mcp_*). Test leave request removed. login_attempts cleared.",
+  "retest_needed": true,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Run: export REACT_APP_BACKEND_URL=... && pytest /app/backend/tests/test_password_auth.py. probe_iter7.py prints the security findings (sub-admin->admin password, XFF spoof, whitespace, session revocation). Clear db.login_attempts between runs. Admin PATCH password deletes all sessions of the target, including seeded test_session_* tokens - re-insert them after.",
+  "rca of the issue": "Reset link bounce: AuthProvider.checkAuth -> GET /auth/me -> 401 (no session) -> api.js response interceptor (URL not in isAuthAttempt) -> onUnauthorized -> window.location.replace('/') because pathname was /reset-password. Earlier manual test passed only because the tester was already logged in. Mitigation applied: treat /auth/me as an auth endpoint in the interceptor (checkAuth already handles the null user)."
+}

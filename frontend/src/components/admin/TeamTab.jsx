@@ -249,7 +249,7 @@ function EmployeeFormModal({ org, isAdmin, onClose, onSave }) {
   });
   const set = (k) => (e) => setF(prev => ({ ...prev, [k]: e.target.value }));
   return (
-    <Modal title="Add Employee" subtitle="Create their record now, they sign in with Google later" onClose={onClose} testid="add-employee-modal">
+    <Modal title="Add Employee" subtitle="Create their record and share their first password" onClose={onClose} testid="add-employee-modal">
       <div className="p-5 space-y-4">
         <div className="grid sm:grid-cols-2 gap-3">
           <Field label="Full Name"><input value={f.name} onChange={set("name")} className={inputCls} data-testid="new-emp-name"/></Field>
@@ -292,7 +292,11 @@ function EmployeeFormModal({ org, isAdmin, onClose, onSave }) {
           Share the first password with them directly — they sign in with this email and are asked to set their own password straight away.
         </p>
         <div className="flex items-center gap-2 pt-1">
-          <button onClick={() => onSave({ ...f, break_max_minutes: Number(f.break_max_minutes) || 60 })} data-testid="save-new-emp"
+          <button onClick={() => {
+              if (!f.name.trim() || !f.email.trim()) return toast.error("Name and work email are required");
+              if ((f.password || "").length < 8) return toast.error("Set a first password of at least 8 characters");
+              onSave({ ...f, break_max_minutes: Number(f.break_max_minutes) || 60 });
+            }} data-testid="save-new-emp"
             className="flex-1 bg-foreground text-background px-4 py-3 hover:bg-primary transition-colors font-medium">Add to Team</button>
           <button onClick={onClose} className="border border-border px-4 py-3 hover:bg-secondary">Cancel</button>
         </div>

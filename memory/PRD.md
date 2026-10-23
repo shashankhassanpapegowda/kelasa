@@ -36,8 +36,18 @@ Employee attendance and route-tracking app, now expanding into a full **employee
   - Frontend: `AdminPanel.jsx` is now a tab shell; tabs live in `components/admin/*`; new `/leave` page for employees.
   - Verified: iteration_5 + iteration_6 test reports (42/43 backend pytest, all frontend fixes confirmed; mobile 390px Team rows fixed).
 
+- 2026-10-23: **Email & password login (Google sign-in removed from the UI).**
+  - bcrypt password hashes, server-side sessions reused (no JWT), min 8 chars, per-IP+email lockout after 5 fails (15 min) plus a 10-attempt per-account cap.
+  - Admin sets the first password when adding an employee → `must_change_password` forces /change-password (enforced in the router AND in `get_current_user`).
+  - Admin/sub-admin "Reset password" action kills the member's sessions; sub-admins cannot touch admin or sub-admin accounts, nor themselves.
+  - Forgot password → single-use 1-hour token emailed through the Emergent-managed Resend proxy; /reset-password page sets the new password and clears all sessions.
+  - New pages: `ChangePassword.jsx`, `ResetPassword.jsx`; `Login.jsx` rewritten as an email/password form.
+  - Verified: iteration_7 report (16/16 backend pytest + full browser flows) plus follow-up curl/browser checks of every fix.
+  - **Email delivery is currently paused**: the proxy returns `insufficient_credits` for this app owner, so reset emails are not reaching inboxes until credits/auto top-up are added.
+
 ## Key API Endpoints
-- Auth: POST /api/auth/session | logout, GET /api/auth/me
+- Auth: POST /api/auth/login (email+password), /api/auth/change-password, /api/auth/forgot-password, /api/auth/reset-password, /api/auth/logout, GET /api/auth/me (legacy POST /api/auth/session kept but unused by the UI)
+- Passwords: PATCH /api/admin/employees/{id}/password (manager, scoped, cannot target another manager)
 - Face: POST /api/face/enroll, GET /api/face/status
 - Attendance: POST /api/attendance/checkin | checkout | break/start | break/end, GET /api/attendance/today | me
 - Location: POST /api/location/ping, GET /api/location/today

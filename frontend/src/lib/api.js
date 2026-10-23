@@ -36,7 +36,7 @@ api.interceptors.response.use(
   (res) => res,
   (err) => {
     const url = err?.config?.url || "";
-    const isAuthAttempt = /\/auth\/(login|forgot-password|reset-password|change-password)/.test(url);
+    const isAuthAttempt = /\/auth\/(me|login|forgot-password|reset-password|change-password)/.test(url);
     if (err?.response?.status === 401 && !isAuthAttempt) {
       setToken(null);
       if (onUnauthorized) onUnauthorized();
