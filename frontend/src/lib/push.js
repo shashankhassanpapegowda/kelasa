@@ -32,10 +32,10 @@ export async function enablePush() {
   return sub;
 }
 
-export async function setDeviceSilent(silent) {
+export async function updateDevice(settings) {
   const sub = await currentSubscription();
   if (!sub) throw new Error("This phone isn't subscribed");
-  await api.patch("/push/subscribe", { endpoint: sub.endpoint, silent });
+  await api.patch("/push/subscribe", { endpoint: sub.endpoint, ...settings });
 }
 
 export async function disablePush() {

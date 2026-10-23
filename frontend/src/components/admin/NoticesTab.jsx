@@ -5,7 +5,7 @@ import { Megaphone, Trash, PushPin } from "@phosphor-icons/react";
 
 export default function NoticesTab() {
   const [items, setItems] = useState([]);
-  const [f, setF] = useState({ title: "", body: "", pinned: false });
+  const [f, setF] = useState({ title: "", body: "", pinned: false, notify_phones: true });
 
   const load = async () => {
     try { setItems((await api.get("/announcements")).data.announcements || []); }
@@ -17,8 +17,8 @@ export default function NoticesTab() {
     if (!f.title.trim()) return toast.error("Add a title");
     try {
       await api.post("/admin/announcements", f);
-      toast.success("Notice posted to the whole team");
-      setF({ title: "", body: "", pinned: false });
+      toast.success(f.notify_phones ? "Notice posted and sent to phones" : "Notice posted to the whole team");
+      setF({ title: "", body: "", pinned: false, notify_phones: true });
       load();
     } catch (e) { toast.error(e?.response?.data?.detail || "Could not post"); }
   };
@@ -44,6 +44,10 @@ export default function NoticesTab() {
           <label className="flex items-center gap-2 text-sm">
             <input type="checkbox" checked={f.pinned} onChange={e => setF({ ...f, pinned: e.target.checked })} data-testid="notice-pinned"/>
             Pin to the top of everyone's dashboard
+          </label>
+          <label className="flex items-center gap-2 text-sm">
+            <input type="checkbox" checked={f.notify_phones} onChange={e => setF({ ...f, notify_phones: e.target.checked })} data-testid="notice-notify-phones"/>
+            Also send to everyone's phone
           </label>
           <button onClick={post} data-testid="post-notice-btn"
             className="w-full bg-foreground text-background px-4 py-3 hover:bg-primary transition-colors font-medium">Publish</button>

@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import { toast } from "sonner";
-import { pushSupported, isIOS, isStandalone, currentSubscription, enablePush, disablePush, setDeviceSilent } from "@/lib/push";
+import { pushSupported, isIOS, isStandalone, currentSubscription, enablePush, disablePush, updateDevice } from "@/lib/push";
 import { DeviceMobile, BellSimpleRinging, BellSimpleSlash, PaperPlaneTilt, SpeakerHigh, SpeakerSlash } from "@phosphor-icons/react";
 
 const COPY = {
@@ -11,9 +11,9 @@ const COPY = {
     on: "This device gets leaving-area alerts and each repeat while they stay outside.",
   },
   employee: {
-    title: "Leave updates on your phone",
-    off: "Get a notification on this phone as soon as your leave is approved or rejected.",
-    on: "This phone gets a notification when your leave is approved or rejected, with the reason.",
+    title: "Phone notifications",
+    off: "Get a notification on this phone when your leave is approved or rejected, and when a new announcement is posted.",
+    on: "Choose below what this phone should be notified about.",
   },
 };
 
@@ -21,6 +21,7 @@ export default function PhoneAlertsCard({ audience = "admin", refreshKey = 0 }) 
   const [state, setState] = useState("loading");
   const [devices, setDevices] = useState(0);
   const [silent, setSilent] = useState(false);
+  const [prefs, setPrefs] = useState({ leave_updates: true, announcements: true });
   const [busy, setBusy] = useState(false);
   const copy = COPY[audience];
 
@@ -32,6 +33,7 @@ export default function PhoneAlertsCard({ audience = "admin", refreshKey = 0 }) 
       const { data } = await api.get("/push/status", { params: { endpoint: sub?.endpoint } });
       setDevices(data.devices);
       setSilent(!!data.silent);
+      setPrefs({ leave_updates: data.leave_updates !== false, announcements: data.announcements !== false });
       setState(sub && data.this_device ? "on" : "off");
     } catch { setState(sub ? "on" : "off"); }
   };
@@ -48,7 +50,11 @@ export default function PhoneAlertsCard({ audience = "admin", refreshKey = 0 }) 
     if (!data.sent) throw new Error("Couldn't reach your devices — turn notifications off and on again");
     toast.success(`Test sent to ${data.sent} device${data.sent === 1 ? "" : "s"}`);
   });
-  const toggleSound = run(() => setDeviceSilent(!silent), silent ? "Sound on for this phone" : "Silent on this phone");
+  const toggleSound = run(() => updateDevice({ silent: !silent }), silent ? "Sound on for this phone" : "Silent on this phone");
+  const togglePref = (key, label) => run(() => updateDevice({ [key]: !prefs[key] }), `${label} ${prefs[key] ? "off" : "on"}`);
+  const switches = audience === "employee"
+    ? [["leave_updates", "Leave updates"], ["announcements", "Announcements"]]
+    : [["announcements", "Announcements"]];
 
   const text = {
     loading: "Checking this device…",
@@ -79,6 +85,17 @@ export default function PhoneAlertsCard({ audience = "admin", refreshKey = 0 }) 
             {devices > 0 && <span className="text-[10px] font-mono text-muted-foreground" data-testid="phone-alerts-devices">{devices} device{devices > 1 ? "s" : ""}</span>}
           </div>
           <div className="text-xs text-muted-foreground max-w-xl">{text}</div>
+          {state === "on" && (
+            <div className="mt-2 flex flex-wrap gap-2" data-testid="phone-alerts-switches">
+              {switches.map(([key, label]) => (
+                <button key={key} onClick={togglePref(key, label)} disabled={busy} data-testid={`phone-pref-${key}`}
+                  className={`text-[11px] px-2 py-1 border inline-flex items-center gap-1.5 transition-colors disabled:opacity-50 ${prefs[key] ? "border-[#00A86B] text-[#00A86B]" : "border-border text-muted-foreground line-through"}`}>
+                  <span className={`w-1.5 h-1.5 ${prefs[key] ? "bg-[#00A86B]" : "bg-muted-foreground"}`}/>
+                  {label} · {prefs[key] ? "ON" : "OFF"}
+                </button>
+              ))}
+            </div>
+          )}
         </div>
       </div>
       <div className="flex items-center gap-2 flex-wrap">

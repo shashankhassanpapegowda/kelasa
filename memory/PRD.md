@@ -122,3 +122,8 @@ Employee attendance and route-tracking app, now expanding into a full **employee
 - Leave approve/reject sends the employee "Leave approved/rejected · <type> · dates" plus "Note: <reason>". Tapping it opens /leave.
 - Tested: iteration_12 (18/18 backend, frontend 100%).
 - Known stale test: test_iter6_leave_fixes::test_sub_admin_cannot_decide_out_of_scope (it contradicts the user's choice that any manager can approve any leave).
+
+## 2026-06 — Announcement push
+- Notices tab has an "Also send to everyone's phone" checkbox (ticked by default) → `notify_phones`. Sends "Notice: <title>" plus the body (up to 180 chars) to every subscribed device except the poster's; the number of devices reached is saved as `pushed_devices`.
+- Per-device switches `leave_updates` / `announcements` (both on by default) via PATCH /api/push/subscribe. Employee card (Leave page) shows both; the admin card shows Announcements.
+- Self-tested via curl with fake endpoints: devices that opted out and the author's device are skipped; unticked notices aren't pushed.

@@ -208,7 +208,9 @@ class PushSubscriptionIn(BaseModel):
 
 class PushDeviceSettings(BaseModel):
     endpoint: str
-    silent: bool
+    silent: Optional[bool] = None
+    leave_updates: Optional[bool] = None
+    announcements: Optional[bool] = None
 
 class GeofenceSettings(BaseModel):
     escalate_minutes: int
@@ -244,6 +246,7 @@ class AnnouncementIn(BaseModel):
     title: str
     body: str
     pinned: bool = False
+    notify_phones: bool = True
 
 # ---------- Helpers ----------
 def now_utc() -> datetime:
@@ -428,7 +431,7 @@ def leave_push_payload(req: dict, status: str, note: str, by: Optional[str]) -> 
     return {"title": f"Leave {status}", "body": body, "tag": f"leave_{req['leave_id']}", "url": "/leave"}
 
 async def push_to_user(user_id: str, payload: dict):
-    subs = await db.push_subscriptions.find({"user_id": user_id}, {"_id": 0}).to_list(50)
+    subs = await db.push_subscriptions.find({"user_id": user_id, "leave_updates": {"$ne": False}}, {"_id": 0}).to_list(50)
     if subs:
         await push_to_subscriptions(subs, payload)
 
@@ -438,6 +441,17 @@ def _track(task):
 
 def spawn_user_push(user_id: str, payload: dict):
     _track(asyncio.create_task(push_to_user(user_id, payload)))
+
+async def push_announcement(doc: dict):
+    subs = await db.push_subscriptions.find(
+        {"announcements": {"$ne": False}, "user_id": {"$ne": doc["author_id"]}}, {"_id": 0}
+    ).to_list(5000)
+    body = doc["body"] if len(doc["body"]) <= 180 else doc["body"][:177] + "…"
+    sent = await push_to_subscriptions(subs, {
+        "title": f"Notice: {doc['title']}", "body": body or f"New notice from {doc.get('author_name') or 'admin'}",
+        "tag": doc["announcement_id"], "url": "/",
+    })
+    await db.announcements.update_one({"announcement_id": doc["announcement_id"]}, {"$set": {"pushed_devices": sent}})
 
 def spawn_push(employee_id: str, payload: dict):
     task = asyncio.create_task(push_to_managers_of(employee_id, payload))
@@ -1992,9 +2006,11 @@ async def add_announcement(payload: AnnouncementIn, user: dict = Depends(require
         "announcement_id": f"ann_{uuid.uuid4().hex[:10]}",
         "title": payload.title.strip(), "body": payload.body.strip(),
         "pinned": payload.pinned, "author_id": user["user_id"], "author_name": user.get("name"),
-        "created_at": now_utc().isoformat(),
+        "created_at": now_utc().isoformat(), "notify_phones": payload.notify_phones,
     }
     await db.announcements.insert_one(doc)
+    if payload.notify_phones:
+        _track(asyncio.create_task(push_announcement(dict(doc))))
     await log_activity(user, "announcement_posted", doc["title"])
     return {"ok": True, "announcement": {k: v for k, v in doc.items() if k != "_id"}}
 
@@ -2221,16 +2237,24 @@ async def push_public_key(user: dict = Depends(get_current_user)):
 async def push_status(endpoint: Optional[str] = None, user: dict = Depends(get_current_user)):
     devices = await db.push_subscriptions.count_documents({"user_id": user["user_id"]})
     mine = await db.push_subscriptions.find_one({"endpoint": endpoint, "user_id": user["user_id"]}, {"_id": 0}) if endpoint else None
-    return {"devices": devices, "this_device": bool(mine), "silent": bool((mine or {}).get("silent"))}
+    mine = mine or {}
+    return {
+        "devices": devices, "this_device": bool(mine), "silent": bool(mine.get("silent")),
+        "leave_updates": mine.get("leave_updates", True) is not False,
+        "announcements": mine.get("announcements", True) is not False,
+    }
 
 @api_router.patch("/push/subscribe")
 async def push_update_device(payload: PushDeviceSettings, user: dict = Depends(get_current_user)):
+    updates = payload.model_dump(exclude={"endpoint"}, exclude_none=True)
+    if not updates:
+        raise HTTPException(status_code=400, detail="No changes")
     res = await db.push_subscriptions.update_one(
-        {"endpoint": payload.endpoint, "user_id": user["user_id"]}, {"$set": {"silent": payload.silent}}
+        {"endpoint": payload.endpoint, "user_id": user["user_id"]}, {"$set": updates}
     )
     if not res.matched_count:
         raise HTTPException(status_code=404, detail="This phone isn't subscribed")
-    return {"ok": True, "silent": payload.silent}
+    return {"ok": True, **updates}
 
 @api_router.post("/push/subscribe")
 async def push_subscribe(payload: PushSubscriptionIn, request: Request, user: dict = Depends(get_current_user)):
