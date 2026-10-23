@@ -142,3 +142,7 @@ Employee attendance and route-tracking app, now expanding into a full **employee
 - `GET /api/admin/reports/payroll-details.csv` (admin = everyone incl. admin accounts; sub-admin = their team). Button in Reports.
 - Private wishes: `wishes` collection, one conversation per sender + celebrant + occasion; a wish can be sent from 3 days before to 7 days after the occasion (relative to today); replies; unread badge on the "Wishes" nav item; push to the other person. Wish buttons on the celebrations card; /wishes page.
 - Tested: iteration_14 (backend 100%, frontend 100%) + fixes (multi-occasion greeting, kind Literal, placeholders, badge spacing).
+
+## 2026-06 — Celebration banner
+- CelebrationBanner (frontend only, uses /api/celebrations?days=0) on My Day, Profile and Console Overview. The person celebrating sees a big dark banner ("Happy Birthday & 4-year Work Anniversary, Ravi!" plus a wish-count link to /wishes); everyone else sees a yellow "Celebrating today" strip with Wish / WISHED. A canvas-confetti burst plays on every page open (bigger for the celebrant) and is skipped when the phone's reduce-motion setting is on.
+- Self-tested via screenshots (390px + desktop, no overflow).

@@ -5,6 +5,7 @@ import { useAuth } from "@/lib/auth";
 import AppHeader from "@/components/AppHeader";
 import AuthPhoto from "@/components/AuthPhoto";
 import ProfileNudge from "@/components/ProfileNudge";
+import CelebrationBanner from "@/components/CelebrationBanner";
 import { Camera, Trash, Bank, IdentificationCard, CalendarHeart, Clock, CheckCircle, XCircle } from "@phosphor-icons/react";
 
 const inputCls = "w-full bg-background border border-border px-3 py-2 text-sm";
@@ -54,6 +55,7 @@ export default function ProfilePage() {
       <main className="max-w-[1100px] mx-auto px-4 sm:px-6 lg:px-8 py-8" data-testid="profile-page">
         <div className="label-overline">Employee</div>
         <h1 className="text-3xl sm:text-4xl font-semibold tracking-tight mt-1">My Profile</h1>
+        <CelebrationBanner/>
         <ProfileNudge profile={p} compact/>
         {!p ? <div className="mt-8 text-sm text-muted-foreground">Loading…</div> : (
           <div className="mt-8 grid lg:grid-cols-2 gap-6 items-start">

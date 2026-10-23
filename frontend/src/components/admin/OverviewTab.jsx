@@ -4,6 +4,7 @@ import { toast } from "sonner";
 import AuthPhoto from "@/components/AuthPhoto";
 import PhotoModal from "@/components/admin/PhotoModal";
 import CelebrationsCard from "@/components/CelebrationsCard";
+import CelebrationBanner from "@/components/CelebrationBanner";
 import { fmtTime, fmtDuration, fmtAcc, accClass, fmtDay, today } from "@/lib/format";
 import { Users, Pulse, Clock, CheckSquare, WarningCircle, AirplaneTilt, Hourglass } from "@phosphor-icons/react";
 import { AreaChart, Area, BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from "recharts";
@@ -34,7 +35,7 @@ export default function OverviewTab() {
 
   return (
     <div data-testid="overview-tab">
-      <div className="-mt-6 mb-6"><CelebrationsCard/></div>
+      <div className="-mt-6 mb-6"><CelebrationBanner/><CelebrationsCard/></div>
       <div className="grid grid-cols-2 lg:grid-cols-4 xl:grid-cols-7 gap-0 border border-border bg-card">
         <Stat label="Headcount" value={stats?.total_employees ?? "—"} icon={<Users size={18} weight="bold"/>} testid="stat-employees"/>
         <Stat label="On Duty Now" value={stats?.on_duty ?? "—"} icon={<Pulse size={18} weight="bold"/>} accent testid="stat-on-duty"/>

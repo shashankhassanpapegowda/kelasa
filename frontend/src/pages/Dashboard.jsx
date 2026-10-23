@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import AppHeader from "@/components/AppHeader";
 import CelebrationsCard from "@/components/CelebrationsCard";
 import ProfileNudge from "@/components/ProfileNudge";
+import CelebrationBanner from "@/components/CelebrationBanner";
 import MapView from "@/components/MapView";
 import FaceCapture from "@/components/FaceCapture";
 import AuthPhoto from "@/components/AuthPhoto";
@@ -237,6 +238,7 @@ export default function Dashboard() {
             </button>
           </div>
 
+          <CelebrationBanner/>
           {/* Status card */}
           {notice && (
             <div className="mt-6 border border-border bg-card p-4 flex items-start gap-3" data-testid="dashboard-notice">
