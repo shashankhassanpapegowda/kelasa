@@ -30,15 +30,17 @@ export default function GeofenceAlerts({ onShowMap }) {
       try {
         const { data } = await api.get("/admin/geofence-alerts");
         const active = data.active || [];
-        const ids = new Set(active.map(a => a.alert_id));
+        const levels = new Map(active.map(a => [a.alert_id, a.escalation_level]));
         if (seen.current) {
-          const fresh = active.filter(a => !seen.current.has(a.alert_id) && !a.acknowledged_at);
-          if (fresh.length) {
+          const fresh = active.filter(a => !seen.current.has(a.alert_id) && a.needs_attention);
+          const escalated = active.filter(a => seen.current.has(a.alert_id) && a.escalation_level > seen.current.get(a.alert_id));
+          if (fresh.length || escalated.length) {
             if (localStorage.getItem("kelasa_alert_muted") !== "1") beep();
-            toast.error(`${fresh[0].name} left the branch area${fresh.length > 1 ? ` (+${fresh.length - 1} more)` : ""}`);
+            fresh.forEach(a => toast.error(`${a.name} left the branch area`));
+            escalated.forEach(a => toast.error(`${a.name} still outside · ${a.minutes_outside} min`));
           }
         }
-        seen.current = ids;
+        seen.current = levels;
         setAlerts(active);
       } catch { /* silent polling */ }
     };
@@ -57,11 +59,11 @@ export default function GeofenceAlerts({ onShowMap }) {
   const ack = async (a) => {
     try {
       await api.post(`/admin/geofence-alerts/${a.alert_id}/ack`);
-      setAlerts(list => list.map(x => x.alert_id === a.alert_id ? { ...x, acknowledged_at: new Date().toISOString() } : x));
+      setAlerts(list => list.map(x => x.alert_id === a.alert_id ? { ...x, needs_attention: false } : x));
     } catch (e) { toast.error(e?.response?.data?.detail || "Could not acknowledge"); }
   };
 
-  const pending = alerts.filter(a => !a.acknowledged_at);
+  const pending = alerts.filter(a => a.needs_attention);
   if (!pending.length) return null;
 
   return (
@@ -79,7 +81,14 @@ export default function GeofenceAlerts({ onShowMap }) {
         {pending.map(a => (
           <div key={a.alert_id} className="p-3 flex items-center justify-between gap-3 flex-wrap" data-testid={`geofence-alert-${a.alert_id}`}>
             <div className="min-w-0">
-              <div className="text-sm font-medium">{a.name}</div>
+              <div className="text-sm font-medium flex items-center gap-2 flex-wrap">
+                {a.name}
+                {a.escalation_level > 0 && (
+                  <span className="text-[9px] font-mono uppercase tracking-wider bg-[#FF3B30] text-white px-1.5 py-0.5" data-testid={`geofence-alert-escalated-${a.alert_id}`}>
+                    STILL OUTSIDE · {a.minutes_outside} MIN
+                  </span>
+                )}
+              </div>
               <div className="text-xs text-muted-foreground font-mono">
                 {a.distance_m} m outside {a.nearest_branch} · left {fmtAgo(a.created_at)} · seen {fmtAgo(a.last_seen_at)}
               </div>

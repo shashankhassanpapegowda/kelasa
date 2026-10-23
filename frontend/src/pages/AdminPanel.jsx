@@ -10,9 +10,10 @@ import NoticesTab from "@/components/admin/NoticesTab";
 import ActivityTab from "@/components/admin/ActivityTab";
 import BranchesTab from "@/components/admin/BranchesTab";
 import GeofenceAlerts from "@/components/admin/GeofenceAlerts";
+import AlertsTab from "@/components/admin/AlertsTab";
 import { api } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
-import { Gauge, Broadcast, Users, AirplaneTilt, CalendarBlank, Megaphone, Buildings, ClockCounterClockwise, MapPinArea } from "@phosphor-icons/react";
+import { Gauge, Broadcast, Users, AirplaneTilt, CalendarBlank, Megaphone, Buildings, ClockCounterClockwise, MapPinArea, BellRinging } from "@phosphor-icons/react";
 
 const TABS = [
   { id: "overview", label: "Overview", icon: Gauge },
@@ -21,6 +22,7 @@ const TABS = [
   { id: "leave", label: "Leave", icon: AirplaneTilt },
   { id: "calendar", label: "Holidays", icon: CalendarBlank },
   { id: "notices", label: "Notices", icon: Megaphone },
+  { id: "alerts", label: "Alerts", icon: BellRinging },
   { id: "branches", label: "Branches", icon: MapPinArea, adminOnly: true },
   { id: "org", label: "Organisation", icon: Buildings, adminOnly: true },
   { id: "activity", label: "Activity", icon: ClockCounterClockwise, adminOnly: true },
@@ -97,6 +99,7 @@ export default function AdminPanel() {
             {tab === "calendar" && <CalendarTab isAdmin={isAdmin}/>}
             {tab === "notices" && <NoticesTab/>}
             {tab === "branches" && isAdmin && <BranchesTab/>}
+            {tab === "alerts" && <AlertsTab/>}
             {tab === "org" && isAdmin && <OrgTab/>}
             {tab === "activity" && isAdmin && <ActivityTab/>}
           </div>

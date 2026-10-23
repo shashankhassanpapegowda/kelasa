@@ -195,6 +195,9 @@ class BranchUpdate(BaseModel):
     radius_m: Optional[int] = None
     clear_geofence: bool = False
 
+class GeofenceSettings(BaseModel):
+    escalate_minutes: int
+
 class FieldStaffUpdate(BaseModel):
     field_staff: bool
 
@@ -246,6 +249,10 @@ def user_local_now(user: dict) -> datetime:
 
 def user_local_today(user: dict) -> str:
     return user_local_now(user).date().isoformat()
+
+def parse_iso(dt_str: str) -> datetime:
+    dt = datetime.fromisoformat(dt_str)
+    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
 
 def to_local(dt_str: str, tz_name: str) -> datetime:
     dt = datetime.fromisoformat(dt_str)
@@ -2102,15 +2109,86 @@ async def admin_reports_csv(
     )
 
 # ---------- Geofence alerts ----------
+DEFAULT_ESCALATE_MINUTES = 30
+
+async def escalate_minutes() -> int:
+    doc = await db.settings.find_one({"key": "geofence"}, {"_id": 0})
+    return (doc or {}).get("escalate_minutes") or DEFAULT_ESCALATE_MINUTES
+
+def enrich_alert(a: dict, every: int) -> dict:
+    end = parse_iso(a["resolved_at"]) if a.get("resolved_at") else now_utc()
+    minutes = max(0, int((end - parse_iso(a["created_at"])).total_seconds() // 60))
+    level = minutes // every
+    a["minutes_outside"] = minutes
+    a["escalation_level"] = level
+    a["needs_attention"] = not a.get("resolved_at") and (
+        not a.get("acknowledged_at") or (a.get("acknowledged_level") or 0) < level
+    )
+    return a
+
+@api_router.get("/admin/settings/geofence")
+async def get_geofence_settings(user: dict = Depends(require_manager)):
+    return {"escalate_minutes": await escalate_minutes()}
+
+@api_router.put("/admin/settings/geofence")
+async def put_geofence_settings(payload: GeofenceSettings, user: dict = Depends(require_admin)):
+    if not (5 <= payload.escalate_minutes <= 480):
+        raise HTTPException(status_code=400, detail="Escalation must be between 5 and 480 minutes")
+    await db.settings.update_one({"key": "geofence"}, {"$set": {"escalate_minutes": payload.escalate_minutes}}, upsert=True)
+    await log_activity(user, "geofence_settings", "Leaving-area alerts", f"repeat every {payload.escalate_minutes} min")
+    return {"escalate_minutes": payload.escalate_minutes}
+
 @api_router.get("/admin/geofence-alerts")
 async def admin_geofence_alerts(user: dict = Depends(require_manager)):
     uf = user_filter(await scoped_user_ids(user))
+    every = await escalate_minutes()
     active = await db.geofence_alerts.find({"resolved_at": None, **uf}, {"_id": 0}).sort("created_at", -1).to_list(200)
     since = (now_utc() - timedelta(hours=24)).isoformat()
     recent = await db.geofence_alerts.find(
         {"resolved_at": {"$ne": None}, "created_at": {"$gte": since}, **uf}, {"_id": 0}
     ).sort("created_at", -1).to_list(50)
-    return {"active": active, "recent": recent}
+    return {
+        "escalate_minutes": every,
+        "active": [enrich_alert(a, every) for a in active],
+        "recent": [enrich_alert(a, every) for a in recent],
+    }
+
+async def alert_history(user: dict, from_date: str, to_date: str) -> dict:
+    every = await escalate_minutes()
+    docs = await db.geofence_alerts.find(
+        {"date": {"$gte": from_date, "$lte": to_date}, **user_filter(await scoped_user_ids(user))}, {"_id": 0}
+    ).sort("created_at", -1).to_list(5000)
+    return {"from": from_date, "to": to_date, "escalate_minutes": every, "alerts": [enrich_alert(a, every) for a in docs]}
+
+@api_router.get("/admin/geofence-alerts/history")
+async def admin_alert_history(
+    from_date: str = Query(..., alias="from"),
+    to_date: str = Query(..., alias="to"),
+    user: dict = Depends(require_manager),
+):
+    return await alert_history(user, from_date, to_date)
+
+@api_router.get("/admin/geofence-alerts/history.csv")
+async def admin_alert_history_csv(
+    request: Request,
+    from_date: str = Query(..., alias="from"),
+    to_date: str = Query(..., alias="to"),
+    auth: Optional[str] = Query(None),
+):
+    u = await manager_from_request(request, auth)
+    data = await alert_history(u, from_date, to_date)
+    tz = u.get("timezone") or DEFAULT_TZ
+    fmt = lambda iso: to_local(iso, tz).strftime("%H:%M") if iso else ""  # noqa: E731
+    rows = [[
+        a["date"], a.get("name") or "", fmt(a["created_at"]),
+        fmt(a.get("resolved_at")) or "Still outside", a.get("resolved_reason") or "",
+        a["minutes_outside"], a.get("distance_m") or "", a.get("nearest_branch") or "",
+        a["escalation_level"], a.get("acknowledged_by") or "",
+    ] for a in data["alerts"]]
+    return csv_response([
+        "Date", "Employee", "Left At", "Returned At", "How It Ended", "Minutes Outside",
+        "Last Distance (m)", "Nearest Branch", "Repeat Alerts", "Acknowledged By",
+    ], rows, f"left_area_log_{from_date}_to_{to_date}.csv")
 
 @api_router.post("/admin/geofence-alerts/{alert_id}/ack")
 async def admin_ack_geofence_alert(alert_id: str, user: dict = Depends(require_manager)):
@@ -2118,8 +2196,9 @@ async def admin_ack_geofence_alert(alert_id: str, user: dict = Depends(require_m
     if not alert:
         raise HTTPException(status_code=404, detail="Alert not found")
     await ensure_in_scope(user, alert["user_id"])
+    level = enrich_alert(dict(alert), await escalate_minutes())["escalation_level"]
     await db.geofence_alerts.update_one({"alert_id": alert_id}, {"$set": {
-        "acknowledged_by": user.get("name"), "acknowledged_at": now_utc().isoformat(),
+        "acknowledged_by": user.get("name"), "acknowledged_at": now_utc().isoformat(), "acknowledged_level": level,
     }})
     return {"ok": True}
 

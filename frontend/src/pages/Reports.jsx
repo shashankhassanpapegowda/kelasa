@@ -3,6 +3,7 @@ import AppHeader from "@/components/AppHeader";
 import { api, API } from "@/lib/api";
 import { toast } from "sonner";
 import BranchReport from "@/components/BranchReport";
+import AlertHistory from "@/components/AlertHistory";
 import { Download, Calendar, ChartBar, WarningCircle, Clock as ClockIcon, Coffee } from "@phosphor-icons/react";
 
 const todayStr = () => new Date().toISOString().slice(0, 10);
@@ -52,14 +53,13 @@ export default function Reports() {
   }), { present: 0, absent: 0, late: 0, work: 0, breakM: 0, overBreak: 0 });
 
   const downloadCsv = async () => {
-    const byBranch = view === "branches";
     try {
-      const path = byBranch ? "/admin/reports/punches.csv" : "/admin/reports.csv";
+      const path = { branches: "/admin/reports/punches.csv", alerts: "/admin/geofence-alerts/history.csv" }[view] || "/admin/reports.csv";
       const res = await api.get(`${path}?from=${from}&to=${to}`, { responseType: "blob" });
       const url = URL.createObjectURL(res.data);
       const a = document.createElement("a");
       a.href = url;
-      a.download = `${byBranch ? "branch_punches" : "attendance_report"}_${from}_to_${to}.csv`;
+      a.download = `${{ branches: "branch_punches", alerts: "left_area_log" }[view] || "attendance_report"}_${from}_to_${to}.csv`;
       document.body.appendChild(a);
       a.click();
       a.remove();
@@ -92,18 +92,19 @@ export default function Reports() {
               </label>
               <button onClick={load} className="border border-border bg-card px-3 py-1.5 text-sm hover:bg-secondary" data-testid="apply-range">Apply</button>
               <button onClick={downloadCsv} className="bg-foreground text-background px-3 py-1.5 text-sm inline-flex items-center gap-2 hover:bg-primary" data-testid="download-csv">
-                <Download size={14} weight="bold"/> {view === "branches" ? "Punch Log CSV" : "CSV"}
+                <Download size={14} weight="bold"/> {{ branches: "Punch Log CSV", alerts: "Left-Area CSV" }[view] || "CSV"}
               </button>
             </div>
           </div>
 
           <div className="mt-6 inline-flex border border-border bg-card" data-testid="report-view-toggle">
-            {[["employees", "By Employee"], ["branches", "By Branch"]].map(([id, label]) => (
+            {[["employees", "By Employee"], ["branches", "By Branch"], ["alerts", "Left Area"]].map(([id, label]) => (
               <button key={id} onClick={() => setView(id)} data-testid={`report-view-${id}`}
                 className={`px-4 py-2 text-xs uppercase tracking-[0.15em] transition-colors ${view === id ? "bg-foreground text-background" : "hover:bg-secondary"}`}>{label}</button>
             ))}
           </div>
 
+          {view === "alerts" && <div className="mt-6"><AlertHistory from={from} to={to} showDownload={false}/></div>}
           {view === "branches" && <BranchReport punches={branchData.punches || []} zoneAlerts={branchData.zone_alerts || 0}/>}
 
           {view === "employees" && <>
