@@ -3,6 +3,8 @@ import AppHeader from "@/components/AppHeader";
 import { api } from "@/lib/api";
 import { toast } from "sonner";
 import { fmtDay, today } from "@/lib/format";
+import PhoneAlertsCard from "@/components/admin/PhoneAlertsCard";
+import { pushSupported, currentSubscription, enablePush } from "@/lib/push";
 import { AirplaneTilt, CalendarBlank, Megaphone, PushPin, X } from "@phosphor-icons/react";
 
 const STATUS_STYLE = {
@@ -20,6 +22,7 @@ export default function LeavePage() {
   const [notices, setNotices] = useState([]);
   const [f, setF] = useState({ type_id: "", start_date: today(), end_date: today(), half_day: false, reason: "" });
   const [busy, setBusy] = useState(false);
+  const [pushKey, setPushKey] = useState(0);
 
   const load = async () => {
     try {
@@ -49,8 +52,24 @@ export default function LeavePage() {
       toast.success("Leave request sent for approval");
       setF({ ...f, reason: "" });
       load();
+      offerPush();
     } catch (e) { toast.error(e?.response?.data?.detail || "Could not submit"); }
     finally { setBusy(false); }
+  };
+
+  const offerPush = async () => {
+    if (!pushSupported() || Notification.permission === "denied" || await currentSubscription()) return;
+    toast("Want to know the moment it's decided?", {
+      description: "Get a phone notification when your leave is approved or rejected.",
+      duration: 12000,
+      action: {
+        label: "Turn on",
+        onClick: async () => {
+          try { await enablePush(); toast.success("Notifications turned on"); setPushKey(k => k + 1); }
+          catch (e) { toast.error(e?.response?.data?.detail || e?.message || "Could not turn on"); }
+        },
+      },
+    });
   };
 
   const cancel = async (r) => {
@@ -66,6 +85,8 @@ export default function LeavePage() {
         <div className="px-4 sm:px-6 py-6">
           <div className="label-overline" data-testid="leave-overline">Time Off</div>
           <h1 className="text-3xl sm:text-4xl font-semibold tracking-tight mt-1">My Leave</h1>
+
+          <div className="mt-6"><PhoneAlertsCard audience="employee" refreshKey={pushKey}/></div>
 
           <div className="mt-6 grid grid-cols-2 lg:grid-cols-4 gap-0 border border-border bg-card" data-testid="leave-balance-cards">
             {balances.map(b => (

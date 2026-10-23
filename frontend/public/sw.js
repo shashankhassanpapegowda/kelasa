@@ -11,8 +11,9 @@ self.addEventListener("push", (event) => {
     badge: "/kelasa-icon-192.png",
     tag: data.tag || "kelasa",
     renotify: true,
-    requireInteraction: true,
-    vibrate: [200, 100, 200],
+    requireInteraction: !data.silent,
+    silent: !!data.silent,
+    ...(data.silent ? {} : { vibrate: [200, 100, 200] }),
     data: { url: data.url || "/admin#alerts" },
   }));
 });

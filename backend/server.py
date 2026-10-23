@@ -206,6 +206,10 @@ class PushSubscriptionIn(BaseModel):
     endpoint: str
     keys: PushKeys
 
+class PushDeviceSettings(BaseModel):
+    endpoint: str
+    silent: bool
+
 class GeofenceSettings(BaseModel):
     escalate_minutes: int
 
@@ -377,9 +381,9 @@ def _send_webpush(sub: dict, body: str):
     )
 
 async def push_to_subscriptions(subs: List[dict], payload: dict) -> int:
-    body = json.dumps(payload, separators=(",", ":"))
     sent, dead = 0, []
     for sub in subs:
+        body = json.dumps({**payload, "silent": bool(sub.get("silent"))}, separators=(",", ":"))
         try:
             await asyncio.to_thread(_send_webpush, sub, body)
             sent += 1
@@ -410,6 +414,30 @@ async def push_to_managers_of(employee_id: str, payload: dict):
             if ids is None or employee_id in ids:
                 allowed.add(m["user_id"])
     await push_to_subscriptions([x for x in subs if x["user_id"] in allowed], payload)
+
+def _fmt_day(d: str) -> str:
+    return ddate.fromisoformat(d).strftime("%d %b")
+
+def leave_push_payload(req: dict, status: str, note: str, by: Optional[str]) -> dict:
+    dates = _fmt_day(req["start_date"]) if req["start_date"] == req["end_date"] else f"{_fmt_day(req['start_date'])} – {_fmt_day(req['end_date'])}"
+    body = f"{req['type_name']} · {dates}"
+    if note:
+        body += f"\nNote: {note}"
+    elif by:
+        body += f" · by {by}"
+    return {"title": f"Leave {status}", "body": body, "tag": f"leave_{req['leave_id']}", "url": "/leave"}
+
+async def push_to_user(user_id: str, payload: dict):
+    subs = await db.push_subscriptions.find({"user_id": user_id}, {"_id": 0}).to_list(50)
+    if subs:
+        await push_to_subscriptions(subs, payload)
+
+def _track(task):
+    _push_tasks.add(task)
+    task.add_done_callback(_push_tasks.discard)
+
+def spawn_user_push(user_id: str, payload: dict):
+    _track(asyncio.create_task(push_to_user(user_id, payload)))
 
 def spawn_push(employee_id: str, payload: dict):
     task = asyncio.create_task(push_to_managers_of(employee_id, payload))
@@ -1859,6 +1887,7 @@ async def admin_decide_leave(leave_id: str, payload: LeaveDecision, user: dict =
     }})
     await log_activity(user, f"leave_{payload.status}", req.get("user_name", req["user_id"]),
                        f"{req['type_name']} {req['start_date']}→{req['end_date']} ({req['days']}d)")
+    spawn_user_push(req["user_id"], leave_push_payload(req, payload.status, (payload.note or "").strip(), user.get("name")))
     return {"ok": True}
 
 @api_router.get("/admin/leave/balances")
@@ -2185,40 +2214,52 @@ async def admin_reports_csv(
 
 # ---------- Push subscription endpoints ----------
 @api_router.get("/push/public-key")
-async def push_public_key(user: dict = Depends(require_manager)):
+async def push_public_key(user: dict = Depends(get_current_user)):
     return {"public_key": VAPID_PUBLIC_KEY}
 
 @api_router.get("/push/status")
-async def push_status(endpoint: Optional[str] = None, user: dict = Depends(require_manager)):
+async def push_status(endpoint: Optional[str] = None, user: dict = Depends(get_current_user)):
     devices = await db.push_subscriptions.count_documents({"user_id": user["user_id"]})
-    this_device = bool(endpoint) and bool(await db.push_subscriptions.find_one({"endpoint": endpoint, "user_id": user["user_id"]}))
-    return {"devices": devices, "this_device": this_device}
+    mine = await db.push_subscriptions.find_one({"endpoint": endpoint, "user_id": user["user_id"]}, {"_id": 0}) if endpoint else None
+    return {"devices": devices, "this_device": bool(mine), "silent": bool((mine or {}).get("silent"))}
+
+@api_router.patch("/push/subscribe")
+async def push_update_device(payload: PushDeviceSettings, user: dict = Depends(get_current_user)):
+    res = await db.push_subscriptions.update_one(
+        {"endpoint": payload.endpoint, "user_id": user["user_id"]}, {"$set": {"silent": payload.silent}}
+    )
+    if not res.matched_count:
+        raise HTTPException(status_code=404, detail="This phone isn't subscribed")
+    return {"ok": True, "silent": payload.silent}
 
 @api_router.post("/push/subscribe")
-async def push_subscribe(payload: PushSubscriptionIn, request: Request, user: dict = Depends(require_manager)):
+async def push_subscribe(payload: PushSubscriptionIn, request: Request, user: dict = Depends(get_current_user)):
     if not payload.endpoint.startswith("https://"):
         raise HTTPException(status_code=400, detail="Invalid push endpoint")
     now_iso = now_utc().isoformat()
     await db.push_subscriptions.update_one({"endpoint": payload.endpoint}, {
         "$set": {"endpoint": payload.endpoint, "keys": payload.keys.model_dump(), "user_id": user["user_id"],
                  "user_agent": request.headers.get("user-agent", "")[:200], "updated_at": now_iso},
-        "$setOnInsert": {"created_at": now_iso},
+        "$setOnInsert": {"created_at": now_iso, "silent": False},
     }, upsert=True)
     return {"ok": True}
 
 @api_router.delete("/push/subscribe")
-async def push_unsubscribe(endpoint: str, user: dict = Depends(require_manager)):
+async def push_unsubscribe(endpoint: str, user: dict = Depends(get_current_user)):
     await db.push_subscriptions.delete_one({"endpoint": endpoint, "user_id": user["user_id"]})
     return {"ok": True}
 
 @api_router.post("/push/test")
-async def push_test(user: dict = Depends(require_manager)):
+async def push_test(user: dict = Depends(get_current_user)):
     subs = await db.push_subscriptions.find({"user_id": user["user_id"]}, {"_id": 0}).to_list(50)
     if not subs:
         raise HTTPException(status_code=400, detail="No device is subscribed yet")
+    manager = user.get("role") in ("admin", "sub_admin")
     sent = await push_to_subscriptions(subs, {
-        "title": "Kelasa alerts are on", "body": "You'll get a notification when someone leaves a branch area.",
-        "tag": "kelasa-test", "url": "/admin#alerts",
+        "title": "Kelasa notifications are on",
+        "body": "You'll get a notification when someone leaves a branch area." if manager
+                else "You'll get a notification when your leave is approved or rejected.",
+        "tag": "kelasa-test", "url": "/admin#alerts" if manager else "/leave",
     })
     return {"ok": True, "sent": sent, "devices": len(subs)}
 
