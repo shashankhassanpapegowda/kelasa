@@ -282,13 +282,11 @@ async def geofenced_branches() -> List[dict]:
 
 async def enforce_geofence(user: dict, lat: float, lng: float, accuracy: Optional[float], action: str) -> Optional[str]:
     """Returns the matched branch name, or raises 403 when outside every branch circle."""
-    if user.get("field_staff"):
-        return None
     branches = await geofenced_branches()
     if not branches:
         return None
     inside, nearest, nearest_gap = nearest_branch(branches, lat, lng, accuracy)
-    if inside:
+    if inside or user.get("field_staff"):
         return inside
     raise HTTPException(status_code=403, detail=(
         f"You are {int(nearest_gap)} m outside {nearest['name']}. "

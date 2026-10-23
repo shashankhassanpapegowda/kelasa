@@ -92,3 +92,11 @@ Employee attendance and route-tracking app, now expanding into a full **employee
 - P1: Per-branch geofence report (punches outside / by branch) in Reports + CSV branch column
 - P1: Payroll export (deferred by user)
 - P2: Auto check-out when leaving geofence, marker clustering, multilingual
+
+## 2026-06 — Branch report + leaving-area alerts
+- Reports → "By Branch" view: branch cards (punch count, employees, left-area alerts), per-branch punch tables; "Punch Log CSV" (`/api/admin/reports/punches.csv`) with Punch In/Out Branch columns. Employee CSV gained Home Branch + Punched At.
+- Leaving-area alerts: location pings outside every branch circle (non field staff) open an alert (`geofence_alerts`), updated while outside, resolved when back inside or on checkout. Admin console red banner + beep (mute toggle), ACK, MAP; Live Map shows OUTSIDE tag/red marker. `GET /api/admin/geofence-alerts`, `POST /api/admin/geofence-alerts/{id}/ack`.
+- Field staff punches still record the branch they were inside (not blocked).
+- Pings during breaks are skipped, so alerts don't update during breaks.
+- Not done: pinning Bengaluru HQ / Tumkur Yard — user did not provide locations.
+- Tested: iteration_9 (29/29 backend, frontend 100%).

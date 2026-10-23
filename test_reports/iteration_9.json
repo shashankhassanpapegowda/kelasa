@@ -1,0 +1,35 @@
+{
+  "summary": "Tested Leaving Area Alerts and Branch Attendance Report, backend and frontend. Backend: 8 new pytest tests plus 21 regression tests from iteration 8 (geofence/branches/field staff/email edit). All 29 pass. Frontend: admin console alert banner, MAP button, ACKNOWLEDGE, sound toggle saved across reload, 15s polling with a toast on a new alert, OUTSIDE tag and red marker on Live Map, Reports By Employee/By Branch toggle, 'Punched At' column, branch cards with filter, left-area alert count, 'Punch Log CSV' download and the employee CSV download. All work end to end. Sub-admin scoping checked in both the API and the UI.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "/api/attendance/checkin (field staff)", "issue": "enforce_geofence returns None for field staff, so a field-staff punch made inside a branch circle is stored with check_in_branch=null. The branch report and punches CSV then show it as 'Outside / no zone'. Suggestion: still work out the matched branch for field staff (skip only the 403 block), so the report shows where they actually punched."},
+      {"endpoint": "/api/location/ping", "issue": "Pings sent while on break are skipped before track_zone runs. An open alert stays open and is not updated during a break, and no new alert can be raised while on break. This may be intended; please confirm."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Reports / Admin Live Map", "issues": ["From/To and the Route Inspector date use the browser's native date input instead of the shadcn Calendar. This existed before this change."]}
+    ]
+  },
+  "test_report_links": ["/app/backend/tests/test_geofence_alerts_branch_report.py", "/app/backend/tests/test_geofence_branches.py", "/app/backend/tests/ui_setup_iter9.py", "/app/test_reports/pytest/pytest_iter9.xml"],
+  "action_items": [
+    "Optional: record check_in_branch/check_out_branch for field staff when they punch inside a circle, so the branch report is accurate.",
+    "Optional: decide how alerts should behave during breaks (pings currently skip track_zone)."
+  ],
+  "critical_code_review_comments": [
+    "server.py is about 2238 lines; split it into routers (attendance, admin, reports, geofence).",
+    "admin_branch_report calls scoped_user_ids(user) twice. Compute it once.",
+    "The reports.csv auth code is duplicated in manager_from_request. Reuse manager_from_request in admin_reports_csv.",
+    "GeofenceAlerts: alerts that are already open when the page loads do not beep or toast (seen.current starts from the first load). Acceptable, but worth noting.",
+    "Routes are /admin/reports, not /reports as stated in the review request."
+  ],
+  "updated_files": ["/app/backend/tests/test_geofence_alerts_branch_report.py", "/app/backend/tests/ui_setup_iter9.py"],
+  "success_rate": {"backend": "100% (29/29)", "frontend": "100%"},
+  "seed_data_creation": "Created several attendance records and geofence_alerts for Ravi (user_testemp01) dated 2026-10-23. Ravi is left checked out, field_staff=false, no open alerts. GeoTest HQ radius was briefly set to 0 during a test and restored to 200.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Use ui_setup_iter9.py setup|checkout to put Ravi on duty outside the zone or to check him out. Note that page.request in Playwright sends the admin cookie, and the backend prefers the cookie over Bearer, so send employee pings from bash/curl. Reports route is /admin/reports. Out-of-scope alert ack (403) was tested with an alert for Anita inserted directly into Mongo."
+}
