@@ -21,3 +21,5 @@ root.render(
     </QueryClientProvider>
   </React.StrictMode>,
 );
+
+requestAnimationFrame(() => window.hideKelasaSplash?.());

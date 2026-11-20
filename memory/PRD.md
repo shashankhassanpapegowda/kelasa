@@ -146,3 +146,11 @@ Employee attendance and route-tracking app, now expanding into a full **employee
 ## 2026-06 — Celebration banner
 - CelebrationBanner (frontend only, uses /api/celebrations?days=0) on My Day, Profile and Console Overview. The person celebrating sees a big dark banner ("Happy Birthday & 4-year Work Anniversary, Ravi!" plus a wish-count link to /wishes); everyone else sees a yellow "Celebrating today" strip with Wish / WISHED. A canvas-confetti burst plays on every page open (bigger for the celebrant) and is skipped when the phone's reduce-motion setting is on.
 - Self-tested via screenshots (390px + desktop, no overflow).
+
+## 2026-06 — Splash screen + app icon (home-screen web app)
+- Original logos saved as public/icons/logo-black.png (light) and logo-white.png (dark). Icons: icon-192/512, maskable-192/512, apple-touch-icon (180), favicons — black logo on white.
+- manifest.json: local icons, white background/theme, id/scope, short_name ಕೆಲಸ.
+- iOS: 32 apple-touch-startup-image PNGs (16 iPhone/iPad sizes × light/dark) in public/splash, drawn with the Hubballi font (the app's Kannada font) plus Inter.
+- In-page splash (#kelasa-splash in index.html), only in standalone mode: follows the phone's light/dark setting, stays at least 900 ms, then fades (hidden from index.js once React renders).
+- Android's own launch screen uses the manifest's white background; the in-page splash switches to the dark version straight after.
+- Header/Login logos now use /icons/logo-black.png.

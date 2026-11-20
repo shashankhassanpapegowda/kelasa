@@ -3,14 +3,53 @@
     <head>
         <meta charset="utf-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1" />
-        <meta name="theme-color" content="#0047FF" />
+        <meta name="theme-color" media="(prefers-color-scheme: light)" content="#ffffff" />
+        <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#000000" />
+        <meta name="color-scheme" content="light dark" />
+        <meta name="apple-mobile-web-app-capable" content="yes" />
+        <meta name="mobile-web-app-capable" content="yes" />
+        <meta name="apple-mobile-web-app-title" content="ಕೆಲಸ" />
+        <meta name="apple-mobile-web-app-status-bar-style" content="default" />
         <meta name="description" content="ಕೆಲಸ (Kelasa) — Powered by Gyarahalli Thammayya Groups" />
-        <link rel="icon" type="image/png" href="https://customer-assets.emergentagent.com/job_employee-locator-4/artifacts/5n0qsrf7_GTG%20LOGO%20BLACK.png" />
-        <link rel="apple-touch-icon" href="https://customer-assets.emergentagent.com/job_employee-locator-4/artifacts/5n0qsrf7_GTG%20LOGO%20BLACK.png" />
+        <link rel="icon" type="image/png" sizes="32x32" href="%PUBLIC_URL%/icons/favicon-32.png" />
+        <link rel="icon" type="image/png" sizes="48x48" href="%PUBLIC_URL%/icons/favicon-48.png" />
+        <link rel="apple-touch-icon" sizes="180x180" href="%PUBLIC_URL%/icons/apple-touch-icon.png" />
+        <link rel="apple-touch-startup-image" media="(device-width: 430px) and (device-height: 932px) and (-webkit-device-pixel-ratio: 3) and (orientation: portrait) and (prefers-color-scheme: light)" href="%PUBLIC_URL%/splash/splash-430x932@3.png" />
+        <link rel="apple-touch-startup-image" media="(device-width: 430px) and (device-height: 932px) and (-webkit-device-pixel-ratio: 3) and (orientation: portrait) and (prefers-color-scheme: dark)" href="%PUBLIC_URL%/splash/splash-430x932@3-dark.png" />
+        <link rel="apple-touch-startup-image" media="(device-width: 393px) and (device-height: 852px) and (-webkit-device-pixel-ratio: 3) and (orientation: portrait) and (prefers-color-scheme: light)" href="%PUBLIC_URL%/splash/splash-393x852@3.png" />
+        <link rel="apple-touch-startup-image" media="(device-width: 393px) and (device-height: 852px) and (-webkit-device-pixel-ratio: 3) and (orientation: portrait) and (prefers-color-scheme: dark)" href="%PUBLIC_URL%/splash/splash-393x852@3-dark.png" />
+        <link rel="apple-touch-startup-image" media="(device-width: 428px) and (device-height: 926px) and (-webkit-device-pixel-ratio: 3) and (orientation: portrait) and (prefers-color-scheme: light)" href="%PUBLIC_URL%/splash/splash-428x926@3.png" />
+        <link rel="apple-touch-startup-image" media="(device-width: 428px) and (device-height: 926px) and (-webkit-device-pixel-ratio: 3) and (orientation: portrait) and (prefers-color-scheme: dark)" href="%PUBLIC_URL%/splash/splash-428x926@3-dark.png" />
+        <link rel="apple-touch-startup-image" media="(device-width: 390px) and (device-height: 844px) and (-webkit-device-pixel-ratio: 3) and (orientation: portrait) and (prefers-color-scheme: light)" href="%PUBLIC_URL%/splash/splash-390x844@3.png" />
+        <link rel="apple-touch-startup-image" media="(device-width: 390px) and (device-height: 844px) and (-webkit-device-pixel-ratio: 3) and (orientation: portrait) and (prefers-color-scheme: dark)" href="%PUBLIC_URL%/splash/splash-390x844@3-dark.png" />
+        <link rel="apple-touch-startup-image" media="(device-width: 414px) and (device-height: 896px) and (-webkit-device-pixel-ratio: 3) and (orientation: portrait) and (prefers-color-scheme: light)" href="%PUBLIC_URL%/splash/splash-414x896@3.png" />
+        <link rel="apple-touch-startup-image" media="(device-width: 414px) and (device-height: 896px) and (-webkit-device-pixel-ratio: 3) and (orientation: portrait) and (prefers-color-scheme: dark)" href="%PUBLIC_URL%/splash/splash-414x896@3-dark.png" />
+        <link rel="apple-touch-startup-image" media="(device-width: 414px) and (device-height: 896px) and (-webkit-device-pixel-ratio: 2) and (orientation: portrait) and (prefers-color-scheme: light)" href="%PUBLIC_URL%/splash/splash-414x896@2.png" />
+        <link rel="apple-touch-startup-image" media="(device-width: 414px) and (device-height: 896px) and (-webkit-device-pixel-ratio: 2) and (orientation: portrait) and (prefers-color-scheme: dark)" href="%PUBLIC_URL%/splash/splash-414x896@2-dark.png" />
+        <link rel="apple-touch-startup-image" media="(device-width: 375px) and (device-height: 812px) and (-webkit-device-pixel-ratio: 3) and (orientation: portrait) and (prefers-color-scheme: light)" href="%PUBLIC_URL%/splash/splash-375x812@3.png" />
+        <link rel="apple-touch-startup-image" media="(device-width: 375px) and (device-height: 812px) and (-webkit-device-pixel-ratio: 3) and (orientation: portrait) and (prefers-color-scheme: dark)" href="%PUBLIC_URL%/splash/splash-375x812@3-dark.png" />
+        <link rel="apple-touch-startup-image" media="(device-width: 414px) and (device-height: 736px) and (-webkit-device-pixel-ratio: 3) and (orientation: portrait) and (prefers-color-scheme: light)" href="%PUBLIC_URL%/splash/splash-414x736@3.png" />
+        <link rel="apple-touch-startup-image" media="(device-width: 414px) and (device-height: 736px) and (-webkit-device-pixel-ratio: 3) and (orientation: portrait) and (prefers-color-scheme: dark)" href="%PUBLIC_URL%/splash/splash-414x736@3-dark.png" />
+        <link rel="apple-touch-startup-image" media="(device-width: 375px) and (device-height: 667px) and (-webkit-device-pixel-ratio: 2) and (orientation: portrait) and (prefers-color-scheme: light)" href="%PUBLIC_URL%/splash/splash-375x667@2.png" />
+        <link rel="apple-touch-startup-image" media="(device-width: 375px) and (device-height: 667px) and (-webkit-device-pixel-ratio: 2) and (orientation: portrait) and (prefers-color-scheme: dark)" href="%PUBLIC_URL%/splash/splash-375x667@2-dark.png" />
+        <link rel="apple-touch-startup-image" media="(device-width: 320px) and (device-height: 568px) and (-webkit-device-pixel-ratio: 2) and (orientation: portrait) and (prefers-color-scheme: light)" href="%PUBLIC_URL%/splash/splash-320x568@2.png" />
+        <link rel="apple-touch-startup-image" media="(device-width: 320px) and (device-height: 568px) and (-webkit-device-pixel-ratio: 2) and (orientation: portrait) and (prefers-color-scheme: dark)" href="%PUBLIC_URL%/splash/splash-320x568@2-dark.png" />
+        <link rel="apple-touch-startup-image" media="(device-width: 402px) and (device-height: 874px) and (-webkit-device-pixel-ratio: 3) and (orientation: portrait) and (prefers-color-scheme: light)" href="%PUBLIC_URL%/splash/splash-402x874@3.png" />
+        <link rel="apple-touch-startup-image" media="(device-width: 402px) and (device-height: 874px) and (-webkit-device-pixel-ratio: 3) and (orientation: portrait) and (prefers-color-scheme: dark)" href="%PUBLIC_URL%/splash/splash-402x874@3-dark.png" />
+        <link rel="apple-touch-startup-image" media="(device-width: 440px) and (device-height: 956px) and (-webkit-device-pixel-ratio: 3) and (orientation: portrait) and (prefers-color-scheme: light)" href="%PUBLIC_URL%/splash/splash-440x956@3.png" />
+        <link rel="apple-touch-startup-image" media="(device-width: 440px) and (device-height: 956px) and (-webkit-device-pixel-ratio: 3) and (orientation: portrait) and (prefers-color-scheme: dark)" href="%PUBLIC_URL%/splash/splash-440x956@3-dark.png" />
+        <link rel="apple-touch-startup-image" media="(device-width: 834px) and (device-height: 1194px) and (-webkit-device-pixel-ratio: 2) and (orientation: portrait) and (prefers-color-scheme: light)" href="%PUBLIC_URL%/splash/splash-834x1194@2.png" />
+        <link rel="apple-touch-startup-image" media="(device-width: 834px) and (device-height: 1194px) and (-webkit-device-pixel-ratio: 2) and (orientation: portrait) and (prefers-color-scheme: dark)" href="%PUBLIC_URL%/splash/splash-834x1194@2-dark.png" />
+        <link rel="apple-touch-startup-image" media="(device-width: 820px) and (device-height: 1180px) and (-webkit-device-pixel-ratio: 2) and (orientation: portrait) and (prefers-color-scheme: light)" href="%PUBLIC_URL%/splash/splash-820x1180@2.png" />
+        <link rel="apple-touch-startup-image" media="(device-width: 820px) and (device-height: 1180px) and (-webkit-device-pixel-ratio: 2) and (orientation: portrait) and (prefers-color-scheme: dark)" href="%PUBLIC_URL%/splash/splash-820x1180@2-dark.png" />
+        <link rel="apple-touch-startup-image" media="(device-width: 768px) and (device-height: 1024px) and (-webkit-device-pixel-ratio: 2) and (orientation: portrait) and (prefers-color-scheme: light)" href="%PUBLIC_URL%/splash/splash-768x1024@2.png" />
+        <link rel="apple-touch-startup-image" media="(device-width: 768px) and (device-height: 1024px) and (-webkit-device-pixel-ratio: 2) and (orientation: portrait) and (prefers-color-scheme: dark)" href="%PUBLIC_URL%/splash/splash-768x1024@2-dark.png" />
+        <link rel="apple-touch-startup-image" media="(device-width: 1024px) and (device-height: 1366px) and (-webkit-device-pixel-ratio: 2) and (orientation: portrait) and (prefers-color-scheme: light)" href="%PUBLIC_URL%/splash/splash-1024x1366@2.png" />
+        <link rel="apple-touch-startup-image" media="(device-width: 1024px) and (device-height: 1366px) and (-webkit-device-pixel-ratio: 2) and (orientation: portrait) and (prefers-color-scheme: dark)" href="%PUBLIC_URL%/splash/splash-1024x1366@2-dark.png" />
         <link rel="manifest" href="%PUBLIC_URL%/manifest.json" />
         <link rel="preconnect" href="https://fonts.googleapis.com" />
         <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-        <link href="https://fonts.googleapis.com/css2?family=Inter:wght@600&family=Hubballi&display=swap" rel="stylesheet" />
+        <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Hubballi&display=swap" rel="stylesheet" />
         <!--
         manifest.json provides metadata used when your web app is installed on a
         user's mobile device or desktop. See https://developers.google.com/web/fundamentals/web-app-manifest/
@@ -27,9 +66,47 @@
         <title>ಕೆಲಸ (Kelasa) · Gyarahalli Thammayya Groups</title>
         <script>window.addEventListener("error",function(e){if(e.error instanceof DOMException&&e.error.name==="DataCloneError"&&e.message&&e.message.includes("PerformanceServerTiming")){e.stopImmediatePropagation();e.preventDefault()}},true);</script>
         <script src="https://assets.emergent.sh/scripts/emergent-main.js"></script>
+        <style>
+            #kelasa-splash { position: fixed; inset: 0; z-index: 99999; display: none; flex-direction: column; align-items: center; justify-content: center; background: #fff; color: #111; transition: opacity 350ms ease; }
+            html.kelasa-app #kelasa-splash { display: flex; }
+            #kelasa-splash.hide { opacity: 0; pointer-events: none; }
+            #kelasa-splash .logo { width: 42vmin; max-width: 220px; height: auto; }
+            #kelasa-splash .logo-dark { display: none; }
+            #kelasa-splash .name { font-family: 'Hubballi', sans-serif; font-size: clamp(36px, 11vmin, 64px); line-height: 1.2; margin-top: 4vmin; }
+            #kelasa-splash .by { position: absolute; bottom: calc(7vh + env(safe-area-inset-bottom)); text-align: center; font-family: 'Inter', sans-serif; font-size: 13px; line-height: 1.6; }
+            #kelasa-splash .by span { display: block; color: #78787f; }
+            @media (prefers-color-scheme: dark) {
+                #kelasa-splash { background: #000; color: #fff; }
+                #kelasa-splash .logo-light { display: none; }
+                #kelasa-splash .logo-dark { display: block; }
+                #kelasa-splash .by span { color: #8c8c94; }
+            }
+        </style>
+        <script>
+            (function () {
+                var standalone = window.matchMedia("(display-mode: standalone)").matches || window.navigator.standalone === true;
+                if (standalone) document.documentElement.classList.add("kelasa-app");
+                window.__kelasaSplashStart = Date.now();
+                window.hideKelasaSplash = function () {
+                    var el = document.getElementById("kelasa-splash");
+                    if (!el) return;
+                    var wait = Math.max(0, 900 - (Date.now() - window.__kelasaSplashStart));
+                    setTimeout(function () {
+                        el.classList.add("hide");
+                        setTimeout(function () { el.remove(); }, 400);
+                    }, wait);
+                };
+            })();
+        </script>
     </head>
     <body>
         <noscript>You need to enable JavaScript to run this app.</noscript>
+        <div id="kelasa-splash" aria-hidden="true" data-testid="app-splash">
+            <img class="logo logo-light" src="%PUBLIC_URL%/icons/logo-black.png" alt="" />
+            <img class="logo logo-dark" src="%PUBLIC_URL%/icons/logo-white.png" alt="" />
+            <div class="name">ಕೆಲಸ</div>
+            <div class="by"><span>Powered by</span>Gyarahalli Thammayya Groups</div>
+        </div>
         <div id="root"></div>
         <!--
       This HTML file is a template.
