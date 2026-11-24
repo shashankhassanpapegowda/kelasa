@@ -168,3 +168,9 @@ Employee attendance and route-tracking app, now expanding into a full **employee
 - Overview: running time is counted; late = distinct people with a shift; department chart; linear trend lines with a legend.
 - Activity log in plain English with filters and pages; ESI not-applicable is consistent; one avatar everywhere; safer removal (archived, records kept); geofence warnings; My Day allowed branches; deep-linked console tabs.
 - Tested: iteration_15 (backend 27/27). Every minor issue it raised is fixed.
+
+## 2026-11 — Missed check-out reminder, monthly payroll summary, sub-admin holidays
+- Cron `checkout-reminders` (*/15, POST /api/cron/checkout-reminders) sends one push per open session once the day-shift end has passed (night shifts are skipped). Each device has its own "Check-out reminders" toggle.
+- GET /api/admin/reports/payroll-summary?month=YYYY-MM&format=xlsx|csv gives per-employee month totals: present, leave, holidays, weekly offs, no shift, not yet joined, upcoming, absent, late, work hours and auto-closed days. Sub-admins get only their team. Download buttons are on the Reports page.
+- Sub-admins can now add and remove holidays.
+- Tested: iteration_16 (backend 20/20, frontend passed). Its minor issues are fixed.

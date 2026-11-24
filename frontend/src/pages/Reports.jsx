@@ -74,7 +74,11 @@ export default function Reports() {
       a.href = url; a.download = `payroll_summary_${month}.${format}`; a.click();
       URL.revokeObjectURL(url);
       toast.success("Monthly summary downloaded");
-    } catch { toast.error("Could not download the summary"); }
+    } catch (e) {
+      let msg = "Could not download the summary";
+      try { msg = JSON.parse(await e.response.data.text()).detail || msg; } catch { /* keep default */ }
+      toast.error(typeof msg === "string" ? msg : "Could not download the summary");
+    }
   };
 
   const downloadCsv = async () => {

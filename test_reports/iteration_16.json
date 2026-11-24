@@ -1,0 +1,38 @@
+{
+  "summary": "Iteration 16: tested the missed-checkout reminder cron, the push 'reminders' setting, the monthly payroll summary (xlsx/csv) and sub-admin holiday add/delete. 20/20 backend pytest pass. Cron: 401 with no bearer or a wrong one, 200 {ok:true,queued:true} with the correct one, 400 when the body is a JSON array. Throwaway users and open records: only the user whose shift ended 30 min ago got checkout_reminder_sent=true. The later-shift, night-shift and no-shift users were not flagged. A second call did not resend (checkout_reminder_at unchanged). Payroll summary xlsx opens in openpyxl and the csv has the same headers. h:mm and decimal hours agree. Dec 2026 shows 31 days. The sub-admin gets only team rows (Ravi and themselves, not Anita or the owner). Employee gets 403, no auth 401, bad month 400/422, bad format 422, ?auth= token works. Holidays: sub-admin add/list/delete works through the API and the UI (/admin#calendar). Employee POST/DELETE gets 403. UI Reports page (admin): with 2026-10 picked, Excel and CSV both download (payroll_summary_2026-10.xlsx/.csv) and show the 'Monthly summary downloaded' toast. Regression downloads all still work: Payroll Details, attendance CSV, branch punch CSV, left-area CSV. The 'Check-out reminders' toggle in PhoneAlertsCard could NOT be tested in the UI, because headless Chromium reports notifications as blocked, so the card never reaches the 'on' state. I checked it through the API and the code instead.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "run_checkout_reminders", "issue": "Fetches every open attendance record with no date bound (to_list(5000)). Records it skips (night shift, no shift, shift not yet ended) are fetched again every 15 min. An open record left over from an earlier day would also get a 'shift ended' reminder. Suggest filtering on date >= yesterday."},
+      {"endpoint": "run_checkout_reminders", "issue": "Reminder text says 'it will close automatically at day end'. Auto-close actually caps work at shift end or 23:59 (session_cap), so the wording may mislead. Check it."},
+      {"endpoint": "GET /api/admin/reports/payroll-summary", "issue": "For staff who joined mid-month, 'Days in Month' is not equal to Present + Leave + Holidays + Weekly Offs + No Shift + Absent. Example for Oct 2026: Anita shows 31 days but only 1 weekly off + 9 absent. Payroll staff may be confused. Add a 'Not yet joined / Not employed' column, or a note."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "CalendarTab", "issue": "Stale-response race. On mount, /holidays?year=2026 is requested twice. Switching the year quickly to 2027 once showed the 2026 list under a '2027' selector, because the late 2026 response overwrote the newer one. Ignore responses that no longer match the current year.", "selector": "[data-testid='holiday-year']", "priority": "LOW"}
+    ],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Reports / Holidays", "issues": ["Uses the browser's native date and month pickers (summary-month, from-date, to-date, holiday-date) instead of the shadcn calendar", "The download toast for a failed summary is generic, because the blob response hides the backend's detail message"]}
+    ]
+  },
+  "test_report_links": ["/app/backend/tests/test_iter16_reminders_summary_holidays.py", "/app/test_reports/pytest/iter16.xml"],
+  "action_items": [
+    "(Optional) Limit the run_checkout_reminders query by date and check the reminder message wording",
+    "(Optional) Add a not-yet-joined column (or note) to the payroll summary so the day counts add up",
+    "(Optional) Guard CalendarTab against stale responses; the isAdmin prop is always true now and could be removed"
+  ],
+  "critical_code_review_comments": [
+    "server.py is 3178 lines; split it into routers (cron, reports, holidays, push)",
+    "Reports.jsx downloadSummary and downloadPayroll click an anchor without adding it to the DOM, and revoke the URL straight away. This works in Chromium but is less robust than downloadCsv, which appends the anchor first",
+    "Night shifts (end <= start) never get reminders, as designed; worth stating in the UI",
+    "The checkout-reminders entry in crons.yml has no timezone; that is fine for */15"
+  ],
+  "updated_files": ["/app/backend/tests/test_iter16_reminders_summary_holidays.py"],
+  "success_rate": {"backend": "100% (20/20)", "frontend": "100% of reachable flows (Check-out reminders toggle not reachable in headless)"},
+  "seed_data_creation": "Throwaway TEST_rem_* users, att_TEST_* records and TEST_ push subscriptions were created and deleted. TEST_SubHoliday and 'TEST_SubUI Holiday' were created and deleted. A TEST_Eve holiday (2026-12-24, created 2026-10-23) was left by an earlier iteration and was not touched.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Run: REACT_APP_BACKEND_URL=... pytest tests/test_iter16_reminders_summary_holidays.py -p no:xdist -o addopts=''. The cron test builds shift times from the current IST time and skips near midnight. The Reports page is at /admin/reports (/reports redirects to /admin). PhoneAlertsCard for employees is on /leave and shows as blocked in headless Chromium."
+}

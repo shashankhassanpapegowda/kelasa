@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api } from "@/lib/api";
 import { toast } from "sonner";
 import { Plus, Trash, CalendarBlank } from "@phosphor-icons/react";
@@ -9,9 +9,13 @@ export default function CalendarTab({ isAdmin }) {
   const [holidays, setHolidays] = useState([]);
   const [form, setForm] = useState({ date: today(), name: "" });
 
+  const latest = useRef(year);
   const load = async (y) => {
-    try { setHolidays((await api.get(`/holidays?year=${y}`)).data.holidays || []); }
-    catch { toast.error("Failed to load calendar"); }
+    latest.current = y;
+    try {
+      const list = (await api.get(`/holidays?year=${y}`)).data.holidays || [];
+      if (latest.current === y) setHolidays(list);
+    } catch { toast.error("Failed to load calendar"); }
   };
   useEffect(() => { load(year); }, [year]);
 

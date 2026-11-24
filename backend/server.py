@@ -2275,6 +2275,8 @@ async def build_report(from_date: str, to_date: str, user_ids=None) -> List[dict
             "absent_days": absent_days,
             "weekly_off_days": counts.get("weekly_off", 0),
             "no_shift_days": counts.get("no_shift", 0),
+            "not_joined_days": counts.get("not_joined", 0),
+            "future_days": counts.get("future", 0),
             "overtime_minutes": sum((r.get("overtime_minutes") or 0) for r in recs),
             "auto_closed_sessions": sum(1 for r in recs if r.get("auto_closed")),
             "over_cap_sessions": sum(1 for r in recs if r.get("over_cap")),
@@ -3031,7 +3033,8 @@ async def cron_celebrations(request: Request):
 
 # ---------- Missed check-out reminder cron ----------
 async def run_checkout_reminders() -> int:
-    opens = await db.attendance.find({"check_out": None, "checkout_reminder_sent": {"$ne": True}}, {"_id": 0}).to_list(5000)
+    since = (now_utc() - timedelta(days=1)).date().isoformat()
+    opens = await db.attendance.find({"check_out": None, "checkout_reminder_sent": {"$ne": True}, "date": {"$gte": since}}, {"_id": 0}).to_list(5000)
     if not opens:
         return 0
     users = {u["user_id"]: u for u in await db.users.find(
@@ -3045,7 +3048,7 @@ async def run_checkout_reminders() -> int:
         tz = ZoneInfo(u.get("timezone") or DEFAULT_TZ)
         local_in = parse_iso(rec["check_in"]).astimezone(tz)
         shift_end_dt = datetime.combine(local_in.date(), end, tz)
-        if local_in >= shift_end_dt or now_utc() < shift_end_dt:
+        if local_in >= shift_end_dt or now_utc() < shift_end_dt or now_utc().astimezone(tz).date() != local_in.date():
             continue
         res = await db.attendance.update_one({"record_id": rec["record_id"], "checkout_reminder_sent": {"$ne": True}},
                                              {"$set": {"checkout_reminder_sent": True, "checkout_reminder_at": now_utc().isoformat()}})
@@ -3055,7 +3058,7 @@ async def run_checkout_reminders() -> int:
         if subs:
             await push_to_subscriptions(subs, {
                 "title": "Forgot to check out?",
-                "body": f"Your shift ended at {u['shift_end']}. Tap to check out, or it will close automatically at day end.",
+                "body": f"Your shift ended at {u['shift_end']}. Tap to check out now — otherwise your hours will be counted only up to {u['shift_end']}.",
                 "tag": f"checkout_{rec['record_id']}", "url": "/dashboard",
             })
             sent += 1
@@ -3090,11 +3093,11 @@ async def payroll_summary(request: Request, month: str = Query(..., pattern=r"^\
     last = (ddate(y + (m == 12), m % 12 + 1, 1) - timedelta(days=1))
     rows = await build_report(first.isoformat(), last.isoformat(), await scoped_user_ids(u))
     header = ["Employee", "Email", "Department", "Branch", "Days in Month", "Present Days", "Leave Days", "Holidays",
-              "Weekly Offs", "No Shift Days", "Absent Days", "Late Days", "Work Hours (h:mm)", "Work Hours (decimal)",
+              "Weekly Offs", "No Shift Days", "Not Yet Joined", "Upcoming Days", "Absent Days", "Late Days", "Work Hours (h:mm)", "Work Hours (decimal)",
               "Auto-closed Days (missed checkout)", "Sessions over 16h"]
     data = [[r["name"], r["email"], r.get("department") or "", r.get("site") or "", (last - first).days + 1,
              r["present_days"], r["leave_days"], r["holiday_days"], r["weekly_off_days"], r["no_shift_days"],
-             r["absent_days"], r["late_days"], _hm(r["total_work_minutes"]), round((r["total_work_minutes"] or 0) / 60, 2),
+             r["not_joined_days"], r["future_days"], r["absent_days"], r["late_days"], _hm(r["total_work_minutes"]), round((r["total_work_minutes"] or 0) / 60, 2),
              r["auto_closed_sessions"], r["over_cap_sessions"]] for r in rows]
     await log_activity(u, "payroll_summary_export", f"Payroll summary {month}", f"{len(data)} employees, {format}")
     fname = f"payroll_summary_{month}"
