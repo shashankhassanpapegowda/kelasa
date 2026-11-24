@@ -27,11 +27,6 @@ export function AuthProvider({ children }) {
         window.location.replace("/");
       }
     });
-    // If returning from OAuth, let AuthCallback handle it first.
-    if (window.location.hash?.includes("session_id=")) {
-      setLoading(false);
-      return;
-    }
     checkAuth();
   }, [checkAuth]);
 

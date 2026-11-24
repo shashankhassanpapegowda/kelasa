@@ -154,3 +154,7 @@ Employee attendance and route-tracking app, now expanding into a full **employee
 - In-page splash (#kelasa-splash in index.html), only in standalone mode: follows the phone's light/dark setting, stays at least 900 ms, then fades (hidden from index.js once React renders).
 - Android's own launch screen uses the manifest's white background; the in-page splash switches to the dark version straight after.
 - Header/Login logos now use /icons/logo-black.png.
+
+## 2026-11 — Google sign-in removed, owner admin password
+- Removed the old Emergent Google sign-in code (POST /api/auth/session, AuthCallback page, #session_id hash handling). Email + password is the only login.
+- shashank@gtgroups.in stays a normal main admin; preview password set directly in the preview DB. On production the owner changes it via /change-password (the ADMIN_PASSWORD secret only seeds an account that doesn't exist or has no password).

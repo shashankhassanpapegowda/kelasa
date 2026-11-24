@@ -108,9 +108,6 @@ def get_object(path: str):
     return resp.content, resp.headers.get("Content-Type", "image/jpeg")
 
 # ---------- Models ----------
-class SessionExchange(BaseModel):
-    session_id: str
-
 class FaceEnrollRequest(BaseModel):
     descriptor: List[float]
     image_b64: str
@@ -594,64 +591,6 @@ def upload_face_image(user_id: str, image_b64: str, kind: str) -> str:
     return result["path"]
 
 # ---------- Auth Routes ----------
-@api_router.post("/auth/session")
-async def auth_session(payload: SessionExchange, response: Response):
-    async with httpx.AsyncClient(timeout=15) as hc:
-        r = await hc.get(
-            "https://demobackend.emergentagent.com/auth/v1/env/oauth/session-data",
-            headers={"X-Session-ID": payload.session_id},
-        )
-    if r.status_code != 200:
-        raise HTTPException(status_code=401, detail="Invalid session_id")
-    data = r.json()
-    email = data["email"]
-    name = data.get("name", email)
-    picture = data.get("picture")
-    session_token = data["session_token"]
-
-    existing = await db.users.find_one({"email": email}, {"_id": 0})
-    if existing:
-        user_id = existing["user_id"]
-        await db.users.update_one(
-            {"user_id": user_id},
-            {"$set": {"name": name, "picture": picture, "pending_invite": False}}
-        )
-    else:
-        user_count = await db.users.count_documents({})
-        role = "admin" if user_count == 0 else "employee"
-        user_id = f"user_{uuid.uuid4().hex[:12]}"
-        await db.users.insert_one({
-            "user_id": user_id,
-            "email": email,
-            "name": name,
-            "picture": picture,
-            "role": role,
-            "face_enrolled": False,
-            "face_descriptor": None,
-            "face_photo_path": None,
-            "shift_start": None,
-            "shift_end": None,
-            "break_max_minutes": 60,
-            "timezone": DEFAULT_TZ,
-            "tracking_mode": "duty_only",
-            "created_at": now_utc().isoformat(),
-        })
-
-    expires_at = now_utc() + timedelta(days=7)
-    await db.user_sessions.insert_one({
-        "user_id": user_id,
-        "session_token": session_token,
-        "expires_at": expires_at.isoformat(),
-        "created_at": now_utc().isoformat(),
-    })
-
-    response.set_cookie(
-        key="session_token", value=session_token,
-        max_age=7 * 24 * 60 * 60, httponly=True, secure=True, samesite="none", path="/",
-    )
-    user_doc = await db.users.find_one({"user_id": user_id}, {"_id": 0, "face_descriptor": 0, "password_hash": 0})
-    return {"user": user_doc, "session_token": session_token}
-
 @api_router.get("/auth/me")
 async def get_me(user: dict = Depends(get_current_user)):
     u = dict(user)
