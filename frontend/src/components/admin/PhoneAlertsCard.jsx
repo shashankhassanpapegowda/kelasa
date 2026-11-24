@@ -21,7 +21,7 @@ export default function PhoneAlertsCard({ audience = "admin", refreshKey = 0 }) 
   const [state, setState] = useState("loading");
   const [devices, setDevices] = useState(0);
   const [silent, setSilent] = useState(false);
-  const [prefs, setPrefs] = useState({ leave_updates: true, announcements: true, celebrations: true });
+  const [prefs, setPrefs] = useState({ leave_updates: true, announcements: true, celebrations: true, reminders: true });
   const [busy, setBusy] = useState(false);
   const copy = COPY[audience];
 
@@ -33,7 +33,7 @@ export default function PhoneAlertsCard({ audience = "admin", refreshKey = 0 }) 
       const { data } = await api.get("/push/status", { params: { endpoint: sub?.endpoint } });
       setDevices(data.devices);
       setSilent(!!data.silent);
-      setPrefs({ leave_updates: data.leave_updates !== false, announcements: data.announcements !== false, celebrations: data.celebrations !== false });
+      setPrefs({ leave_updates: data.leave_updates !== false, announcements: data.announcements !== false, celebrations: data.celebrations !== false, reminders: data.reminders !== false });
       setState(sub && data.this_device ? "on" : "off");
     } catch { setState(sub ? "on" : "off"); }
   };
@@ -53,7 +53,7 @@ export default function PhoneAlertsCard({ audience = "admin", refreshKey = 0 }) 
   const toggleSound = run(() => updateDevice({ silent: !silent }), silent ? "Sound on for this phone" : "Silent on this phone");
   const togglePref = (key, label) => run(() => updateDevice({ [key]: !prefs[key] }), `${label} ${prefs[key] ? "off" : "on"}`);
   const switches = audience === "employee"
-    ? [["leave_updates", "Leave updates"], ["announcements", "Announcements"], ["celebrations", "Celebrations & wishes"]]
+    ? [["leave_updates", "Leave updates"], ["reminders", "Check-out reminders"], ["announcements", "Announcements"], ["celebrations", "Celebrations & wishes"]]
     : [["announcements", "Announcements"], ["celebrations", "Celebrations & wishes"]];
 
   const text = {

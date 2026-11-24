@@ -214,6 +214,7 @@ class PushDeviceSettings(BaseModel):
     leave_updates: Optional[bool] = None
     announcements: Optional[bool] = None
     celebrations: Optional[bool] = None
+    reminders: Optional[bool] = None
 
 class WishIn(BaseModel):
     to_user_id: str
@@ -2044,7 +2045,7 @@ async def list_holidays(user: dict = Depends(get_current_user), year: Optional[i
     return {"year": y, "holidays": docs}
 
 @api_router.post("/admin/holidays")
-async def add_holiday(payload: HolidayIn, user: dict = Depends(require_admin)):
+async def add_holiday(payload: HolidayIn, user: dict = Depends(require_manager)):
     try:
         ddate.fromisoformat(payload.date)
     except ValueError:
@@ -2058,7 +2059,7 @@ async def add_holiday(payload: HolidayIn, user: dict = Depends(require_admin)):
     return {"ok": True, "holiday": {k: v for k, v in doc.items() if k != "_id"}}
 
 @api_router.delete("/admin/holidays/{holiday_id}")
-async def delete_holiday(holiday_id: str, user: dict = Depends(require_admin)):
+async def delete_holiday(holiday_id: str, user: dict = Depends(require_manager)):
     doc = await db.holidays.find_one({"holiday_id": holiday_id}, {"_id": 0})
     if not doc:
         raise HTTPException(status_code=404, detail="Not found")
@@ -2372,6 +2373,7 @@ async def push_status(endpoint: Optional[str] = None, user: dict = Depends(get_c
         "leave_updates": mine.get("leave_updates", True) is not False,
         "announcements": mine.get("announcements", True) is not False,
         "celebrations": mine.get("celebrations", True) is not False,
+        "reminders": mine.get("reminders", True) is not False,
     }
 
 @api_router.patch("/push/subscribe")
@@ -3026,6 +3028,96 @@ async def cron_celebrations(request: Request):
         return {"ok": True, "duplicate": True}
     _track(asyncio.create_task(run_morning_celebrations(day_key)))
     return {"ok": True, "queued": day_key}
+
+# ---------- Missed check-out reminder cron ----------
+async def run_checkout_reminders() -> int:
+    opens = await db.attendance.find({"check_out": None, "checkout_reminder_sent": {"$ne": True}}, {"_id": 0}).to_list(5000)
+    if not opens:
+        return 0
+    users = {u["user_id"]: u for u in await db.users.find(
+        {"user_id": {"$in": list({o["user_id"] for o in opens})}}, {"_id": 0, "face_descriptor": 0, "password_hash": 0}).to_list(5000)}
+    sent = 0
+    for rec in opens:
+        u = users.get(rec["user_id"]) or {}
+        start, end = parse_hhmm(u.get("shift_start") or ""), parse_hhmm(u.get("shift_end") or "")
+        if not start or not end or end <= start:
+            continue
+        tz = ZoneInfo(u.get("timezone") or DEFAULT_TZ)
+        local_in = parse_iso(rec["check_in"]).astimezone(tz)
+        shift_end_dt = datetime.combine(local_in.date(), end, tz)
+        if local_in >= shift_end_dt or now_utc() < shift_end_dt:
+            continue
+        res = await db.attendance.update_one({"record_id": rec["record_id"], "checkout_reminder_sent": {"$ne": True}},
+                                             {"$set": {"checkout_reminder_sent": True, "checkout_reminder_at": now_utc().isoformat()}})
+        if not res.modified_count:
+            continue
+        subs = await db.push_subscriptions.find({"user_id": rec["user_id"], "reminders": {"$ne": False}}, {"_id": 0}).to_list(20)
+        if subs:
+            await push_to_subscriptions(subs, {
+                "title": "Forgot to check out?",
+                "body": f"Your shift ended at {u['shift_end']}. Tap to check out, or it will close automatically at day end.",
+                "tag": f"checkout_{rec['record_id']}", "url": "/dashboard",
+            })
+            sent += 1
+    return sent
+
+@api_router.post("/cron/checkout-reminders")
+async def cron_checkout_reminders(request: Request):
+    # Cron endpoints must ack 2xx immediately; enqueue/background the actual work.
+    if not _cron_authorized(request):
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    try:
+        envelope = await request.json()
+    except ValueError:
+        envelope = None
+    if envelope is not None and not isinstance(envelope, dict):
+        raise HTTPException(status_code=400, detail="Invalid body")
+    _track(asyncio.create_task(run_checkout_reminders()))
+    return {"ok": True, "queued": True}
+
+# ---------- Monthly payroll summary ----------
+def _hm(m: int) -> str:
+    return f"{(m or 0) // 60}:{(m or 0) % 60:02d}"
+
+@api_router.get("/admin/reports/payroll-summary")
+async def payroll_summary(request: Request, month: str = Query(..., pattern=r"^\d{4}-\d{2}$"),
+                          format: Literal["xlsx", "csv"] = "xlsx", auth: Optional[str] = Query(None)):
+    u = await manager_from_request(request, auth)
+    y, m = map(int, month.split("-"))
+    if not 1 <= m <= 12:
+        raise HTTPException(status_code=400, detail="Invalid month")
+    first = ddate(y, m, 1)
+    last = (ddate(y + (m == 12), m % 12 + 1, 1) - timedelta(days=1))
+    rows = await build_report(first.isoformat(), last.isoformat(), await scoped_user_ids(u))
+    header = ["Employee", "Email", "Department", "Branch", "Days in Month", "Present Days", "Leave Days", "Holidays",
+              "Weekly Offs", "No Shift Days", "Absent Days", "Late Days", "Work Hours (h:mm)", "Work Hours (decimal)",
+              "Auto-closed Days (missed checkout)", "Sessions over 16h"]
+    data = [[r["name"], r["email"], r.get("department") or "", r.get("site") or "", (last - first).days + 1,
+             r["present_days"], r["leave_days"], r["holiday_days"], r["weekly_off_days"], r["no_shift_days"],
+             r["absent_days"], r["late_days"], _hm(r["total_work_minutes"]), round((r["total_work_minutes"] or 0) / 60, 2),
+             r["auto_closed_sessions"], r["over_cap_sessions"]] for r in rows]
+    await log_activity(u, "payroll_summary_export", f"Payroll summary {month}", f"{len(data)} employees, {format}")
+    fname = f"payroll_summary_{month}"
+    if format == "csv":
+        return csv_response(header, data, f"{fname}.csv")
+    from openpyxl import Workbook
+    from openpyxl.styles import Font
+    wb = Workbook()
+    ws = wb.active
+    ws.title = first.strftime("%b %Y")
+    ws.append(header)
+    for c in ws[1]:
+        c.font = Font(bold=True)
+    for row in data:
+        ws.append(row)
+    for i, h in enumerate(header, 1):
+        ws.column_dimensions[ws.cell(1, i).column_letter].width = max(12, len(h) + 2)
+    ws.freeze_panes = "B2"
+    out = io.BytesIO()
+    wb.save(out)
+    return StreamingResponse(iter([out.getvalue()]),
+                             media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                             headers={"Content-Disposition": f'attachment; filename="{fname}.xlsx"'})
 
 # ---------- Payroll details export ----------
 @api_router.get("/admin/reports/payroll-details.csv")

@@ -25,6 +25,7 @@ export default function Reports() {
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(false);
   const [view, setView] = useState("employees");
+  const [month, setMonth] = useState(todayStr().slice(0, 7));
   const [applied, setApplied] = useState({ from: null, to: null });
   const [branchData, setBranchData] = useState({ punches: [], zone_alerts: 0 });
 
@@ -63,6 +64,17 @@ export default function Reports() {
       URL.revokeObjectURL(url);
       toast.success("Payroll details downloaded");
     } catch { toast.error("Download failed"); }
+  };
+
+  const downloadSummary = async (format) => {
+    try {
+      const res = await api.get(`/admin/reports/payroll-summary?month=${month}&format=${format}`, { responseType: "blob" });
+      const url = URL.createObjectURL(res.data);
+      const a = document.createElement("a");
+      a.href = url; a.download = `payroll_summary_${month}.${format}`; a.click();
+      URL.revokeObjectURL(url);
+      toast.success("Monthly summary downloaded");
+    } catch { toast.error("Could not download the summary"); }
   };
 
   const downloadCsv = async () => {
@@ -104,6 +116,16 @@ export default function Reports() {
                   className="bg-card border border-border px-2 py-1.5 text-sm font-mono"/>
               </label>
               <button onClick={load} className="border border-border bg-card px-3 py-1.5 text-sm hover:bg-secondary" data-testid="apply-range">Apply</button>
+              <span className="inline-flex items-center border border-border bg-card" data-testid="payroll-summary-group">
+                <input type="month" value={month} onChange={(e) => setMonth(e.target.value)} data-testid="summary-month"
+                  className="bg-transparent px-2 py-1.5 text-sm font-mono border-r border-border"/>
+                <button onClick={() => downloadSummary("xlsx")} data-testid="download-summary-xlsx"
+                  className="px-3 py-1.5 text-sm inline-flex items-center gap-2 hover:bg-secondary transition-colors">
+                  <Download size={14} weight="bold"/> Month Summary · Excel
+                </button>
+                <button onClick={() => downloadSummary("csv")} data-testid="download-summary-csv"
+                  className="px-3 py-1.5 text-sm border-l border-border hover:bg-secondary transition-colors">CSV</button>
+              </span>
               <button onClick={downloadPayroll} className="border border-border bg-card px-3 py-1.5 text-sm inline-flex items-center gap-2 hover:border-foreground" data-testid="download-payroll">
                 <Download size={14} weight="bold"/> Payroll Details
               </button>

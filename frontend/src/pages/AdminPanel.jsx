@@ -106,7 +106,7 @@ export default function AdminPanel() {
             {tab === "live" && <LiveTab/>}
             {tab === "team" && <TeamTab isAdmin={isAdmin} currentUserId={user?.user_id}/>}
             {tab === "leave" && <LeaveTab isAdmin={isAdmin} currentUserId={user?.user_id} onDecided={refreshPending}/>}
-            {tab === "calendar" && <CalendarTab isAdmin={isAdmin}/>}
+            {tab === "calendar" && <CalendarTab isAdmin/>}
             {tab === "notices" && <NoticesTab/>}
             {tab === "branches" && isAdmin && <BranchesTab/>}
             {tab === "alerts" && <AlertsTab/>}

@@ -7,3 +7,10 @@ crons:
     method: POST
     # Cron endpoints must ack 2xx immediately; enqueue/background the actual work.
     enabled: true
+  - name: checkout-reminders
+    description: "Every 15 min, reminds on-duty staff on their phone once their shift has ended"
+    cron: "*/15 * * * *"
+    endpoint: "{{BASE_URL}}/api/cron/checkout-reminders"
+    method: POST
+    # Cron endpoints must ack 2xx immediately; enqueue/background the actual work.
+    enabled: true
