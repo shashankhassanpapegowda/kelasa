@@ -69,7 +69,7 @@ export default function CalendarTab() {
   const fmt = (d) => new Date(`${d}T00:00:00`).toLocaleDateString([], { weekday: "short", day: "2-digit", month: "long" });
 
   return (
-    <div className="border border-border bg-card max-w-3xl" data-testid="calendar-tab">
+    <div className="border border-border bg-card max-w-5xl" data-testid="calendar-tab">
       <div className="p-4 border-b border-border flex items-center justify-between gap-3 flex-wrap">
         <div className="flex items-center gap-2">
           <CalendarBlank size={16} weight="bold" className="text-primary"/>

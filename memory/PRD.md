@@ -174,3 +174,8 @@ Employee attendance and route-tracking app, now expanding into a full **employee
 - GET /api/admin/reports/payroll-summary?month=YYYY-MM&format=xlsx|csv gives per-employee month totals: present, leave, holidays, weekly offs, no shift, not yet joined, upcoming, absent, late, work hours and auto-closed days. Sub-admins get only their team. Download buttons are on the Reports page.
 - Sub-admins can now add and remove holidays.
 - Tested: iteration_16 (backend 20/20, frontend passed). Its minor issues are fixed.
+
+## 2026-11 — Branch holidays + morning missed-checkout digest
+- Holidays have a `branches` list (empty means the whole company). Admins choose whole company or chosen branches. Sub-admins can only add/remove holidays for their managed_sites. Reports, leave day counts and the employee holiday list apply only the holidays that cover the employee's home branch. Renaming a branch updates its holidays; deleting a branch removes it from them.
+- Cron `missed-checkout-digest` runs at 08:00 IST (POST /api/cron/missed-checkout-digest) and sends each admin/sub-admin a daily push listing who in their scope missed check-out yesterday, or "All clear".
+- Tested: iteration_17 (backend 16/16, frontend 100%). Its minor issues are fixed.

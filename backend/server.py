@@ -1649,6 +1649,9 @@ async def delete_site(unit_id: str, user: dict = Depends(require_admin)):
     await db.sites.delete_one({"unit_id": unit_id})
     await db.users.update_many({"site": doc["name"]}, {"$set": {"site": None}})
     await db.users.update_many({"managed_sites": doc["name"]}, {"$pull": {"managed_sites": doc["name"]}})
+    branch_hols = await db.holidays.find({"branches": doc["name"]}, {"_id": 0, "holiday_id": 1, "branches": 1}).to_list(2000)
+    await db.holidays.delete_many({"holiday_id": {"$in": [h["holiday_id"] for h in branch_hols if h["branches"] == [doc["name"]]]}})
+    await db.holidays.update_many({"branches": doc["name"]}, {"$pull": {"branches": doc["name"]}})
     await log_activity(user, "site_removed", doc["name"])
     return {"ok": True}
 
@@ -3129,6 +3132,7 @@ def _name_list(names: List[str], limit: int = 4) -> str:
     return ", ".join(shown) + (f" and {rest} more" if rest else "")
 
 async def run_missed_checkout_digest(day_key: str):
+    await auto_close_stale_sessions()
     yday = (ddate.fromisoformat(day_key) - timedelta(days=1)).isoformat()
     recs = await db.attendance.find({"date": yday, "$or": [
         {"check_out": None}, {"auto_closed": True, "auto_close_reason": {"$regex": "^missed checkout"}}]},
@@ -3171,7 +3175,6 @@ async def cron_missed_checkout_digest(request: Request):
         await db.cron_runs.insert_one({"key": f"missed-digest-{day_key}", "run_id": run_id, "status": "queued", "created_at": now_utc().isoformat()})
     except DuplicateKeyError:
         return {"ok": True, "duplicate": True}
-    await auto_close_stale_sessions()
     _track(asyncio.create_task(run_missed_checkout_digest(day_key)))
     return {"ok": True, "queued": day_key}
 
