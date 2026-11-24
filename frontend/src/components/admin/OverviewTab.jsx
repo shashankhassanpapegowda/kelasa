@@ -69,7 +69,7 @@ export default function OverviewTab() {
               </defs>
               <CartesianGrid stroke="currentColor" strokeOpacity={0.08} vertical={false}/>
               <XAxis dataKey="label" tick={{ fontSize: 10, fontFamily: "monospace" }} tickLine={false} axisLine={false} interval="preserveStartEnd"/>
-              <YAxis tick={{ fontSize: 11, fontFamily: "monospace" }} tickLine={false} axisLine={false} allowDecimals={false} domain={[0, "dataMax"]}/>
+              <YAxis tick={{ fontSize: 11, fontFamily: "monospace" }} tickLine={false} axisLine={false} allowDecimals={false} domain={[0, (max) => Math.max(max, 4)]}/>
               <Legend verticalAlign="top" height={28} iconType="plainline" wrapperStyle={{ fontSize: 12 }}/>
               <Tooltip contentStyle={{ fontSize: 12, border: "1px solid var(--border)", borderRadius: 0, background: "var(--card)" }}/>
               <Area type="linear" dataKey="present" stroke="#00E676" strokeWidth={2} fill="url(#gPresent)" name="Present"/>

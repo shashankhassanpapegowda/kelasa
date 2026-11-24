@@ -1071,6 +1071,7 @@ async def check_out(payload: CheckRequest, user: dict = Depends(get_current_user
             "overtime_minutes": calc["overtime_minutes"],
             "over_cap": calc["over_cap"],
             "auto_closed": auto_closed,
+            "auto_close_reason": "missed checkout (checked out on a later day)" if auto_closed else None,
             "over_break": over_break,
         }}
     )
@@ -1311,7 +1312,9 @@ async def admin_stats(user: dict = Depends(require_manager)):
     now = now_utc()
     for rec in await db.attendance.find({"check_out": None, **uf}, {"_id": 0}).to_list(2000):
         total_minutes += running_minutes(rec, now)
-    late_today = await db.attendance.count_documents({"date": today, "late_by_minutes": {"$gt": 0}, **uf})
+    shift_ids = {u["user_id"] for u in await db.users.find({**uf, "shift_start": {"$nin": [None, ""]}}, {"_id": 0, "user_id": 1}).to_list(5000)}
+    late_today = len({r["user_id"] for r in await db.attendance.find(
+        {"date": today, "late_by_minutes": {"$gt": 0}, **uf}, {"_id": 0, "user_id": 1}).to_list(5000) if r["user_id"] in shift_ids})
     leave_q = {"status": "approved", "start_date": {"$lte": today}, "end_date": {"$gte": today}, **uf}
     on_leave_today = await db.leave_requests.count_documents(leave_q)
     pending_leave = await db.leave_requests.count_documents({"status": "pending", **uf})
@@ -2115,10 +2118,11 @@ async def admin_activity(
         filt.setdefault("$and", []).append({"$or": [{"actor_name": rx}, {"target_name": rx}, {"details": rx}, {"action": rx}]})
     if from_date or to_date:
         rng = {}
+        tz = ZoneInfo(user.get("timezone") or DEFAULT_TZ)
         if from_date:
-            rng["$gte"] = from_date
+            rng["$gte"] = datetime.combine(ddate.fromisoformat(from_date), dtime(0, 0), tz).astimezone(timezone.utc).isoformat()
         if to_date:
-            rng["$lte"] = to_date + "T23:59:59.999999+99:99"
+            rng["$lt"] = datetime.combine(ddate.fromisoformat(to_date) + timedelta(days=1), dtime(0, 0), tz).astimezone(timezone.utc).isoformat()
         filt["created_at"] = rng
     total = await db.activity_log.count_documents(filt)
     docs = await db.activity_log.find(filt, {"_id": 0}).sort("created_at", -1).skip((page - 1) * page_size).to_list(page_size)
@@ -2143,6 +2147,7 @@ async def admin_analytics(days: int = 14, user: dict = Depends(require_manager))
     ).to_list(5000)
     headcount = await db.users.count_documents(uf)
 
+    shift_users = {u["user_id"] for u in await db.users.find({**uf, "shift_start": {"$nin": [None, ""]}}, {"_id": 0, "user_id": 1}).to_list(5000)}
     daily = {}
     for i in range(days):
         d = (start + timedelta(days=i)).isoformat()
@@ -2156,7 +2161,7 @@ async def admin_analytics(days: int = 14, user: dict = Depends(require_manager))
         if key not in seen:
             seen.add(key)
             row["present"] += 1
-            if (r.get("late_by_minutes") or 0) > 0:
+            if (r.get("late_by_minutes") or 0) > 0 and r["user_id"] in shift_users:
                 row["late"] += 1
         row["work_hours"] += round((r.get("net_work_minutes") or 0) / 60.0, 2)
     for lv in leaves:
@@ -2227,7 +2232,6 @@ async def build_report(from_date: str, to_date: str, user_ids=None) -> List[dict
 
     joined = {p["user_id"]: p.get("date_of_joining") for p in await db.employee_profiles.find(
         {"user_id": {"$in": [u["user_id"] for u in users]}}, {"_id": 0, "user_id": 1, "date_of_joining": 1}).to_list(5000)}
-    today_d = datetime.now(ZoneInfo(DEFAULT_TZ)).date()
     rows = []
     for u in users:
         recs = by_user.get(u["user_id"], [])
@@ -2237,6 +2241,7 @@ async def build_report(from_date: str, to_date: str, user_ids=None) -> List[dict
         late_dates = {r["date"] for r in recs if has_shift and (r.get("late_by_minutes") or 0) > 0}
         jd = joined.get(u["user_id"]) or (u.get("created_at") or "")[:10] or None
         counts: dict = {}
+        today_d = datetime.now(ZoneInfo(u.get("timezone") or DEFAULT_TZ)).date()
         for d in all_dates:
             st = day_status(ddate.fromisoformat(d), today=today_d, present=d in present_dates, late=d in late_dates,
                             on_leave=d in leave_dates, holiday=d in holiday_dates,
@@ -2265,7 +2270,7 @@ async def build_report(from_date: str, to_date: str, user_ids=None) -> List[dict
             "break_max_minutes": u.get("break_max_minutes", 60),
             "present_days": len(present_dates),
             "leave_days": len(leave_dates),
-            "holiday_days": len(holiday_dates),
+            "holiday_days": counts.get("holiday", 0),
             "absent_days": absent_days,
             "weekly_off_days": counts.get("weekly_off", 0),
             "no_shift_days": counts.get("no_shift", 0),
@@ -2633,12 +2638,12 @@ def clean_profile(payload: ProfileUpdate, today_iso: str) -> dict:
         if v and not re.fullmatch(r"\d{10}|\d{17}", v):
             raise HTTPException(status_code=400, detail="ESI number must be 10 or 17 digits")
         out["esi"] = v or None
-        if v:
-            out["esi_not_applicable"] = False
     if data.get("esi_not_applicable") is not None:
         out["esi_not_applicable"] = bool(data["esi_not_applicable"])
-        if out["esi_not_applicable"]:
+        if out["esi_not_applicable"] and not out.get("esi"):
             out["esi"] = None
+    if out.get("esi"):
+        out["esi_not_applicable"] = False
     return out
 
 def clean_bank(payload: BankDetailsIn) -> dict:

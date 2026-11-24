@@ -159,3 +159,12 @@ Employee attendance and route-tracking app, now expanding into a full **employee
 - Removed the old Emergent Google sign-in code (POST /api/auth/session, AuthCallback page, #session_id hash handling). Email + password is the only login.
 - shashank@gtgroups.in stays a normal main admin; preview password set directly in the preview DB. On production the owner changes it via /change-password (the ADMIN_PASSWORD secret only seeds an account that doesn't exist or has no password).
 - 2026-11: Splash is now always white with the black logo, even in phone dark mode (dark startup images, dark CSS and dark theme-color removed; 16 light iOS startup images remain). Note: the CRA dev server caches public/index.html — restart frontend after editing it.
+
+
+## 2026-11 — Payroll accuracy (Phase 1) + Data/UX cleanup (Phase 2)
+- Phase 3 CANCELLED by user (no regularisation, calendar, shift templates, CSV import, holiday import, Kannada toggle). Code removed.
+- New backend/attendance_calc.py with unit tests. Open sessions auto-close at shift end or 23:59 (night shifts at 23:59 same day). Net time = out - in - breaks, capped at 16h. A migration recalculated history and kept the originals in original_check_out.
+- Absent days skip weekly off (per employee, default Sunday), holidays, no shift, days before joining, pending invites and approved leave.
+- Overview: running time is counted; late = distinct people with a shift; department chart; linear trend lines with a legend.
+- Activity log in plain English with filters and pages; ESI not-applicable is consistent; one avatar everywhere; safer removal (archived, records kept); geofence warnings; My Day allowed branches; deep-linked console tabs.
+- Tested: iteration_15 (backend 27/27). Every minor issue it raised is fixed.

@@ -47,18 +47,20 @@ export const sentence = (e) => {
   return tmpl ? tmpl.replace("{t}", t) : `${humanAction(e.action)}${e.target_name ? ` — ${e.target_name}` : ""}`;
 };
 
+const DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 export const humanDetails = (d) => {
   if (!d) return "";
-  const parts = d.split(/,\s*/).map(p => {
+  const parts = d.replace(/\[([\d,\s]*)\]/g, (_, l) => l.split(/,\s*/).filter(Boolean).map(n => DAYS[+n] || n).join("/")).split(/,\s+(?=\w+=)|,(?=\w+=)/).map(p => {
     const m = p.match(/^(\w+)=(.*)$/);
     if (m) {
       const f = FIELD[m[1]] || m[1].replace(/_/g, " ");
       const v = m[2];
       if (v === "None" || v === "") return `${f} cleared`;
       if (m[1] === "manager_id") return `${f} changed`;
+      if (m[1] === "weekly_off") return `${f} set to ${v.replace(/\//g, ", ")}`;
       return `${f} set to ${v}`;
     }
-    return FIELD[p] ? `${FIELD[p]} updated` : p.replace(/→/g, " to ").replace(/_/g, " ");
+    return FIELD[p] ? `${FIELD[p]} updated` : p.replace(/→/g, " to ");
   });
   return parts.join(" · ");
 };
@@ -97,7 +99,7 @@ export default function ActivityTab() {
         </div>
         <select value={f.action} onChange={set("action")} className={inputCls} data-testid="activity-action-filter">
           <option value="">All actions</option>
-          {data.actions.map(a => <option key={a} value={a}>{VERB[a] ? VERB[a].replace(/ ?\{t\}'?s?/g, "").replace(/"\s*"/, "").trim() : humanAction(a)}</option>)}
+          {data.actions.map(a => <option key={a} value={a}>{humanAction(a)}</option>)}
         </select>
         <input value={f.person} onChange={set("person")} placeholder="Employee or admin" className={inputCls} data-testid="activity-person-filter"/>
         <div className="flex gap-2">

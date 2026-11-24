@@ -3,7 +3,7 @@ import { createPortal } from "react-dom";
 
 export default function RemoveEmployeeDialog({ emp, onCancel, onConfirm }) {
   const [typed, setTyped] = useState("");
-  const ok = typed.trim().toLowerCase() === (emp.name || "").trim().toLowerCase();
+  const ok = typed.trim() === (emp.name || "").trim();
   return createPortal(
     <div className="fixed inset-0 z-[1000] bg-black/80 grid place-items-center p-4" onClick={onCancel} data-testid="remove-employee-dialog">
       <div className="bg-card border border-border max-w-md w-full p-5 space-y-4" onClick={e => e.stopPropagation()}>

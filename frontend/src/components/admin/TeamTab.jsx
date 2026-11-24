@@ -47,7 +47,7 @@ export default function TeamTab({ isAdmin, currentUserId }) {
   };
 
   const [removing, setRemoving] = useState(null);
-  const removeEmployee = (emp) => setRemoving(emp);
+  const removeEmployee = (emp) => { document.querySelectorAll("details[open]").forEach(d => d.removeAttribute("open")); setRemoving(emp); };
   const confirmRemove = () => {
     const emp = removing;
     setRemoving(null);

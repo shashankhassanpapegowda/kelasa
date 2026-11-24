@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import AppHeader from "@/components/AppHeader";
 import OverviewTab from "@/components/admin/OverviewTab";
 import LiveTab from "@/components/admin/LiveTab";
@@ -40,7 +40,11 @@ export default function AdminPanel() {
       .catch(() => {});
   };
 
-  useEffect(() => { if (window.location.hash !== `#${tab}`) window.history.pushState(null, "", `#${tab}`); }, [tab]);
+  const firstSync = useRef(true);
+  useEffect(() => {
+    if (window.location.hash !== `#${tab}`) window.history[firstSync.current ? "replaceState" : "pushState"](null, "", `#${tab}`);
+    firstSync.current = false;
+  }, [tab]);
   useEffect(() => {
     const onHash = () => setTab(window.location.hash.replace("#", "") || "overview");
     window.addEventListener("hashchange", onHash);
