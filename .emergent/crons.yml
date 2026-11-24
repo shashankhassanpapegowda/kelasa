@@ -14,3 +14,11 @@ crons:
     method: POST
     # Cron endpoints must ack 2xx immediately; enqueue/background the actual work.
     enabled: true
+  - name: missed-checkout-digest
+    description: "8am IST phone summary to admins and sub-admins of who missed check-out yesterday"
+    cron: "0 8 * * *"
+    timezone: "Asia/Kolkata"
+    endpoint: "{{BASE_URL}}/api/cron/missed-checkout-digest"
+    method: POST
+    # Cron endpoints must ack 2xx immediately; enqueue/background the actual work.
+    enabled: true

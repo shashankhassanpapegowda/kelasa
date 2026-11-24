@@ -274,6 +274,7 @@ class LeaveDecision(BaseModel):
 class HolidayIn(BaseModel):
     date: str
     name: str
+    branches: List[str] = []
 
 class AnnouncementIn(BaseModel):
     title: str
@@ -1598,6 +1599,7 @@ async def update_site(unit_id: str, payload: BranchUpdate, user: dict = Depends(
     if "name" in updates:
         await db.users.update_many({"site": doc["name"]}, {"$set": {"site": updates["name"]}})
         await db.users.update_many({"managed_sites": doc["name"]}, {"$set": {"managed_sites.$": updates["name"]}})
+        await db.holidays.update_many({"branches": doc["name"]}, {"$set": {"branches.$": updates["name"]}})
     new_doc = await db.sites.find_one({"unit_id": unit_id}, {"_id": 0})
     detail = f"radius {new_doc.get('radius_m')} m" if new_doc.get("radius_m") else "geofence cleared"
     await log_activity(user, "branch_updated", new_doc["name"], detail)
@@ -1812,12 +1814,22 @@ def count_leave_days_raw(start: str, end: str, half_day: bool) -> float:
         return 0.5
     return float(n)
 
-async def count_leave_days(start: str, end: str, half_day: bool) -> float:
-    """Calendar days minus any declared company holidays inside the range."""
+def holiday_scope(site: Optional[str]) -> dict:
+    """Holidays that apply to someone at `site`: company-wide ones plus their branch's."""
+    conds = [{"branches": {"$in": [None, []]}}]
+    if site:
+        conds.append({"branches": site})
+    return {"$or": conds}
+
+def holiday_applies(h: dict, site: Optional[str]) -> bool:
+    return not h.get("branches") or (site in h["branches"])
+
+async def count_leave_days(start: str, end: str, half_day: bool, site: Optional[str] = None) -> float:
+    """Calendar days minus declared holidays (company-wide or the employee's branch) inside the range."""
     days = count_leave_days_raw(start, end, half_day)
     if half_day:
         return days
-    holidays = await db.holidays.count_documents({"date": {"$gte": start, "$lte": end}})
+    holidays = len(await db.holidays.distinct("date", {"date": {"$gte": start, "$lte": end}, **holiday_scope(site)}))
     net = days - holidays
     if net <= 0:
         raise HTTPException(status_code=400, detail="Those dates are already company holidays")
@@ -1872,7 +1884,7 @@ async def create_leave_request(payload: LeaveRequestIn, user: dict = Depends(get
     ltype = await db.leave_types.find_one({"type_id": payload.type_id, "active": True}, {"_id": 0})
     if not ltype:
         raise HTTPException(status_code=400, detail="Invalid leave type")
-    days = await count_leave_days(payload.start_date, payload.end_date, payload.half_day)
+    days = await count_leave_days(payload.start_date, payload.end_date, payload.half_day, user.get("site"))
     overlap = await db.leave_requests.find_one({
         "user_id": user["user_id"],
         "status": {"$in": ["approved", "pending"]},
@@ -2039,10 +2051,20 @@ async def delete_leave_type(type_id: str, user: dict = Depends(require_admin)):
 @api_router.get("/holidays")
 async def list_holidays(user: dict = Depends(get_current_user), year: Optional[int] = None):
     y = year or datetime.now(ZoneInfo(DEFAULT_TZ)).year
-    docs = await db.holidays.find(
-        {"date": {"$gte": f"{y}-01-01", "$lte": f"{y}-12-31"}}, {"_id": 0}
-    ).sort("date", 1).to_list(400)
+    q = {"date": {"$gte": f"{y}-01-01", "$lte": f"{y}-12-31"}}
+    if user.get("role") not in ("admin", "sub_admin"):
+        q.update(holiday_scope(user.get("site")))
+    docs = await db.holidays.find(q, {"_id": 0}).sort("date", 1).to_list(400)
+    for d in docs:
+        d["branches"] = d.get("branches") or []
+        d["can_edit"] = can_edit_holiday(user, d)
     return {"year": y, "holidays": docs}
+
+def can_edit_holiday(user: dict, h: dict) -> bool:
+    if user.get("role") == "admin":
+        return True
+    mine = set(user.get("managed_sites") or [])
+    return user.get("role") == "sub_admin" and bool(h.get("branches")) and set(h["branches"]) <= mine
 
 @api_router.post("/admin/holidays")
 async def add_holiday(payload: HolidayIn, user: dict = Depends(require_manager)):
@@ -2050,12 +2072,32 @@ async def add_holiday(payload: HolidayIn, user: dict = Depends(require_manager))
         ddate.fromisoformat(payload.date)
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid date") from None
-    if await db.holidays.find_one({"date": payload.date}):
-        raise HTTPException(status_code=400, detail="A holiday already exists on this date")
-    doc = {"holiday_id": f"hol_{uuid.uuid4().hex[:10]}", "date": payload.date,
-           "name": payload.name.strip(), "created_at": now_utc().isoformat()}
+    name = payload.name.strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Give the holiday a name")
+    branches = sorted({b.strip() for b in payload.branches if b.strip()})
+    known = {s["name"] for s in await db.sites.find({}, {"_id": 0, "name": 1}).to_list(500)}
+    if set(branches) - known:
+        raise HTTPException(status_code=400, detail=f"Unknown branch: {', '.join(sorted(set(branches) - known))}")
+    if user.get("role") != "admin":
+        mine = set(user.get("managed_sites") or [])
+        if not mine:
+            raise HTTPException(status_code=403, detail="You don't manage any branch yet. Ask an admin to assign one.")
+        if not branches:
+            raise HTTPException(status_code=400, detail="Pick at least one of your branches")
+        if set(branches) - mine:
+            raise HTTPException(status_code=403, detail="You can only mark holidays for your own branches")
+    clash_q = {"date": payload.date}
+    if branches:
+        clash_q["$or"] = [{"branches": {"$in": [None, []]}}, {"branches": {"$in": branches}}]
+    clash = await db.holidays.find_one(clash_q, {"_id": 0})
+    if clash:
+        where = ", ".join(clash.get("branches") or []) or "the whole company"
+        raise HTTPException(status_code=400, detail=f"{clash['name']} is already a holiday on this date for {where}")
+    doc = {"holiday_id": f"hol_{uuid.uuid4().hex[:10]}", "date": payload.date, "name": name, "branches": branches,
+           "created_by": user["user_id"], "created_at": now_utc().isoformat()}
     await db.holidays.insert_one(doc)
-    await log_activity(user, "holiday_added", doc["name"], doc["date"])
+    await log_activity(user, "holiday_added", doc["name"], f"{doc['date']} · {', '.join(branches) or 'whole company'}")
     return {"ok": True, "holiday": {k: v for k, v in doc.items() if k != "_id"}}
 
 @api_router.delete("/admin/holidays/{holiday_id}")
@@ -2063,6 +2105,8 @@ async def delete_holiday(holiday_id: str, user: dict = Depends(require_manager))
     doc = await db.holidays.find_one({"holiday_id": holiday_id}, {"_id": 0})
     if not doc:
         raise HTTPException(status_code=404, detail="Not found")
+    if not can_edit_holiday(user, doc):
+        raise HTTPException(status_code=403, detail="You can only remove holidays for your own branches")
     await db.holidays.delete_one({"holiday_id": holiday_id})
     await log_activity(user, "holiday_removed", doc["name"], doc["date"])
     return {"ok": True}
@@ -2215,9 +2259,8 @@ async def build_report(from_date: str, to_date: str, user_ids=None) -> List[dict
     all_dates = {(d_from + timedelta(days=i)).isoformat() for i in range(total_days)}
 
     holiday_docs = await db.holidays.find(
-        {"date": {"$gte": from_date, "$lte": to_date}}, {"_id": 0, "date": 1}
-    ).to_list(500)
-    holiday_dates = {h["date"] for h in holiday_docs}
+        {"date": {"$gte": from_date, "$lte": to_date}}, {"_id": 0, "date": 1, "branches": 1}
+    ).to_list(2000)
 
     leaves = await db.leave_requests.find(
         {"status": "approved", "start_date": {"$lte": to_date}, "end_date": {"$gte": from_date}, **uf}, {"_id": 0}
@@ -2238,6 +2281,7 @@ async def build_report(from_date: str, to_date: str, user_ids=None) -> List[dict
         recs = by_user.get(u["user_id"], [])
         present_dates = {r["date"] for r in recs}
         leave_dates = leave_dates_by_user.get(u["user_id"], set())
+        holiday_dates = {h["date"] for h in holiday_docs if holiday_applies(h, u.get("site"))}
         has_shift = bool(u.get("shift_start"))
         late_dates = {r["date"] for r in recs if has_shift and (r.get("late_by_minutes") or 0) > 0}
         jd = joined.get(u["user_id"]) or (u.get("created_at") or "")[:10] or None
@@ -3077,6 +3121,59 @@ async def cron_checkout_reminders(request: Request):
         raise HTTPException(status_code=400, detail="Invalid body")
     _track(asyncio.create_task(run_checkout_reminders()))
     return {"ok": True, "queued": True}
+
+# ---------- Morning missed check-out digest (managers) ----------
+def _name_list(names: List[str], limit: int = 4) -> str:
+    shown = names[:limit]
+    rest = len(names) - len(shown)
+    return ", ".join(shown) + (f" and {rest} more" if rest else "")
+
+async def run_missed_checkout_digest(day_key: str):
+    yday = (ddate.fromisoformat(day_key) - timedelta(days=1)).isoformat()
+    recs = await db.attendance.find({"date": yday, "$or": [
+        {"check_out": None}, {"auto_closed": True, "auto_close_reason": {"$regex": "^missed checkout"}}]},
+        {"_id": 0, "user_id": 1}).to_list(5000)
+    missed = {r["user_id"] for r in recs}
+    names = {u["user_id"]: u.get("name") or u.get("email") for u in await db.users.find(
+        {"user_id": {"$in": list(missed)}}, {"_id": 0, "user_id": 1, "name": 1, "email": 1}).to_list(5000)}
+    subs = await db.push_subscriptions.find({"reminders": {"$ne": False}}, {"_id": 0}).to_list(5000)
+    managers = {m["user_id"]: m for m in await db.users.find(
+        {"user_id": {"$in": list({x["user_id"] for x in subs})}, "role": {"$in": ["admin", "sub_admin"]}}, {"_id": 0}).to_list(500)}
+    label = ddate.fromisoformat(yday).strftime("%a %d %b")
+    sent = 0
+    for mid, m in managers.items():
+        ids = await scoped_user_ids(m)
+        team = sorted(names[u] for u in missed if u in names and (ids is None or u in ids) and u != mid)
+        if team:
+            title = f"{len(team)} missed check-out {label}"
+            body = f"{_name_list(team)} didn't check out. Their hours were counted only up to shift end or 23:59."
+        else:
+            title = f"All clear for {label}"
+            body = "Everyone in your team checked out yesterday."
+        sent += await push_to_subscriptions([x for x in subs if x["user_id"] == mid],
+                                            {"title": title, "body": body, "tag": f"missed-digest-{yday}", "url": "/reports"})
+    await db.cron_runs.update_one({"key": f"missed-digest-{day_key}"}, {"$set": {"status": "done", "sent": sent, "missed": len(missed)}})
+
+@api_router.post("/cron/missed-checkout-digest")
+async def cron_missed_checkout_digest(request: Request):
+    # Cron endpoints must ack 2xx immediately; enqueue/background the actual work.
+    if not _cron_authorized(request):
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    try:
+        envelope = await request.json()
+    except ValueError:
+        envelope = None
+    if envelope is not None and not isinstance(envelope, dict):
+        raise HTTPException(status_code=400, detail="Invalid body")
+    run_id = request.headers.get("X-Webhook-Id") or (envelope or {}).get("run_id") or uuid.uuid4().hex
+    day_key = datetime.now(ZoneInfo(DEFAULT_TZ)).date().isoformat()
+    try:
+        await db.cron_runs.insert_one({"key": f"missed-digest-{day_key}", "run_id": run_id, "status": "queued", "created_at": now_utc().isoformat()})
+    except DuplicateKeyError:
+        return {"ok": True, "duplicate": True}
+    await auto_close_stale_sessions()
+    _track(asyncio.create_task(run_missed_checkout_digest(day_key)))
+    return {"ok": True, "queued": day_key}
 
 # ---------- Monthly payroll summary ----------
 def _hm(m: int) -> str:
