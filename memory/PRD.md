@@ -158,3 +158,4 @@ Employee attendance and route-tracking app, now expanding into a full **employee
 ## 2026-11 — Google sign-in removed, owner admin password
 - Removed the old Emergent Google sign-in code (POST /api/auth/session, AuthCallback page, #session_id hash handling). Email + password is the only login.
 - shashank@gtgroups.in stays a normal main admin; preview password set directly in the preview DB. On production the owner changes it via /change-password (the ADMIN_PASSWORD secret only seeds an account that doesn't exist or has no password).
+- 2026-11: Splash is now always white with the black logo, even in phone dark mode (dark startup images, dark CSS and dark theme-color removed; 16 light iOS startup images remain). Note: the CRA dev server caches public/index.html — restart frontend after editing it.
