@@ -328,7 +328,7 @@ export default function Dashboard() {
                         ? zone.inside
                           ? <span className="text-[#00E676]">Inside {zone.name}</span>
                           : <span className="text-[#FF3B30]">{Math.round(zone.gap)} m outside {zone.name}</span>
-                        : <span className="text-muted-foreground">Punch only inside a branch area ({fence.branches.length} branch{fence.branches.length > 1 ? "es" : ""})</span>}
+                        : <span className="text-foreground/80" data-testid="geofence-allowed-branches">You can check in at: {fence.branches.map(b => b.name).join(", ")}</span>}
                 </div>
               )}
               <p className="mt-3 text-xs text-muted-foreground flex items-start gap-1.5 max-w-md">

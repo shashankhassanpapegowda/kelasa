@@ -42,9 +42,15 @@ export default function BranchesTab() {
     <div className="space-y-6" data-testid="branches-tab">
       <div className={`border p-4 text-sm ${fenced.length ? "border-[#0047FF]/40 bg-[#0047FF]/5" : "border-yellow-500/40 bg-yellow-500/5"}`} data-testid="geofence-status">
         {fenced.length
-          ? <>Geofencing is <strong>ON</strong> — employees can punch in/out only inside any of the {fenced.length} branch circle{fenced.length > 1 ? "s" : ""}. {fieldStaff} field staff can punch from anywhere.</>
-          : <>Geofencing is <strong>OFF</strong> — no branch has a location pinned yet, so employees can punch from anywhere. Pin at least one branch to turn it on.</>}
+          ? <>Geofencing is <strong>on</strong>. Staff must be inside a pinned branch to check in or out. {fieldStaff} field staff can check in from anywhere.</>
+          : <>Geofencing is <strong>off</strong>. No branch has a location pinned yet, so staff can check in from anywhere. Pin at least one branch to turn it on.</>}
       </div>
+      {branches.filter(b => !(b.lat != null && b.radius_m) && employees.some(e => e.site === b.name)).map(b => (
+        <div key={b.unit_id} className="border border-[#FF3B30]/50 bg-[#FF3B30]/5 p-3 text-sm" data-testid={`unpinned-warning-${b.unit_id}`}>
+          <strong>{b.name}</strong> has {employees.filter(e => e.site === b.name).length} employee(s) but no pinned location.
+          {fenced.length ? " They can only check in at another pinned branch until you pin it." : " Pin it so its staff check in at the right place."}
+        </div>
+      ))}
 
       <div className="border border-border bg-card">
         <div className="p-4 border-b border-border flex items-center justify-between gap-3 flex-wrap">

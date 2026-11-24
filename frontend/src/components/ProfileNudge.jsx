@@ -3,15 +3,16 @@ import { CheckCircle, Circle, Clock, ArrowRight } from "@phosphor-icons/react";
 
 export const profileChecklist = (p) => [
   { key: "bank", label: "Bank account", done: !!p.bank, waiting: !p.bank && !!p.pending_bank },
-  { key: "uan", label: "EPF UAN", done: !!p.uan },
-  { key: "esi", label: p.esi_not_applicable ? "ESI (not applicable)" : "ESI number", done: !!p.esi || !!p.esi_not_applicable },
+  { key: "uan", label: "EPF UAN (optional)", done: !!p.uan, optional: true },
+  { key: "esi", label: p.esi_not_applicable ? "ESI (not applicable)" : "ESI number (optional)", done: !!p.esi || !!p.esi_not_applicable, optional: true },
 ];
 
 export default function ProfileNudge({ profile, compact = false }) {
   if (!profile) return null;
   const items = profileChecklist(profile);
-  const score = items.reduce((s, i) => s + (i.done ? 1 : i.waiting ? 0.5 : 0), 0);
-  const pct = Math.round((score / items.length) * 100);
+  const required = items.filter(i => !i.optional);
+  const score = required.reduce((s, i) => s + (i.done ? 1 : i.waiting ? 0.5 : 0), 0);
+  const pct = Math.round((score / required.length) * 100);
   if (pct === 100) return null;
 
   return (
@@ -19,7 +20,7 @@ export default function ProfileNudge({ profile, compact = false }) {
       <div className="flex items-center justify-between gap-3 flex-wrap">
         <div>
           <div className="text-sm font-medium">Complete your payroll details</div>
-          <div className="text-xs text-muted-foreground">Needed so your salary and PF/ESI are processed without delay.</div>
+          <div className="text-xs text-foreground/70">Your bank account is needed so salary is paid without delay. EPF and ESI are optional.</div>
         </div>
         <div className="font-mono text-2xl font-semibold text-primary" data-testid="profile-nudge-percent">{pct}%</div>
       </div>

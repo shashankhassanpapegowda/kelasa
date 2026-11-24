@@ -40,7 +40,13 @@ export default function AdminPanel() {
       .catch(() => {});
   };
 
-  useEffect(() => { window.location.hash = tab; }, [tab]);
+  useEffect(() => { if (window.location.hash !== `#${tab}`) window.history.pushState(null, "", `#${tab}`); }, [tab]);
+  useEffect(() => {
+    const onHash = () => setTab(window.location.hash.replace("#", "") || "overview");
+    window.addEventListener("hashchange", onHash);
+    window.addEventListener("popstate", onHash);
+    return () => { window.removeEventListener("hashchange", onHash); window.removeEventListener("popstate", onHash); };
+  }, []);
 
   useEffect(() => { refreshPending(); }, [tab]);
 

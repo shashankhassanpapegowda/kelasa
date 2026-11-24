@@ -4,6 +4,7 @@ import { toast } from "sonner";
 import AuthPhoto from "@/components/AuthPhoto";
 import BankRequestsPanel from "@/components/admin/BankRequestsPanel";
 import EmployeeProfileModal from "@/components/admin/EmployeeProfileModal";
+import RemoveEmployeeDialog from "@/components/admin/RemoveEmployeeDialog";
 import { fmtDuration } from "@/lib/format";
 import { UserPlus, PencilSimple, Trash, X, MagnifyingGlass, Clock as ClockIcon, Buildings, Key, IdentificationCard } from "@phosphor-icons/react";
 
@@ -45,8 +46,11 @@ export default function TeamTab({ isAdmin, currentUserId }) {
     catch (e) { toast.error(e?.response?.data?.detail || "Action failed"); }
   };
 
-  const removeEmployee = (emp) => {
-    if (!window.confirm(`Remove ${emp.name} permanently?\n\nTheir attendance, routes and leave records will be deleted. This cannot be undone.`)) return;
+  const [removing, setRemoving] = useState(null);
+  const removeEmployee = (emp) => setRemoving(emp);
+  const confirmRemove = () => {
+    const emp = removing;
+    setRemoving(null);
     act(() => api.delete(`/admin/employees/${emp.user_id}`), `${emp.name} removed`);
   };
 
@@ -99,7 +103,7 @@ export default function TeamTab({ isAdmin, currentUserId }) {
                   {emp.on_break && <Tag className="bg-yellow-400 text-black">ON BREAK</Tag>}
                   {emp.role !== "employee" && <Tag className="border border-border">{ROLE_LABEL[emp.role]}</Tag>}
                   {emp.field_staff && <Tag className="bg-[#0047FF]/15 text-[#0047FF]">FIELD STAFF</Tag>}
-                  {emp.tracking_mode === "always_on" && <Tag className="bg-[#0047FF] text-white">24/7</Tag>}
+                  {emp.tracking_mode === "always_on" && <span title="24/7 = location is tracked all the time. Duty only = tracked only between check-in and check-out."><Tag className="bg-[#0047FF] text-white">24/7</Tag></span>}
                   {emp.pending_invite && <Tag className="bg-secondary text-foreground">INVITE PENDING</Tag>}
                   {!emp.has_password && <Tag className="bg-[#FF3B30]/15 text-[#FF3B30]">NO PASSWORD</Tag>}
                   {emp.must_change_password && emp.has_password && <Tag className="bg-yellow-400 text-black">TEMP PASSWORD</Tag>}
@@ -137,6 +141,7 @@ export default function TeamTab({ isAdmin, currentUserId }) {
                   )}
                   {isAdmin && (
                     <button onClick={() => act(() => api.patch(`/admin/employees/${emp.user_id}/tracking_mode`, { tracking_mode: emp.tracking_mode === "always_on" ? "duty_only" : "always_on" }), "Tracking mode updated")}
+                      title="24/7 = location is tracked all the time. Duty only = tracked only between check-in and check-out."
                       className="text-[10px] label-overline hover:text-primary" data-testid={`toggle-tracking-${emp.user_id}`}>
                       {emp.tracking_mode === "always_on" ? "→ DUTY ONLY" : "→ 24/7"}
                     </button>
@@ -148,9 +153,14 @@ export default function TeamTab({ isAdmin, currentUserId }) {
                     </button>
                   )}
                   {emp.user_id !== currentUserId && (
-                    <button onClick={() => removeEmployee(emp)} className="text-[10px] label-overline text-muted-foreground hover:text-[#FF3B30] inline-flex items-center gap-1" data-testid={`delete-emp-${emp.user_id}`}>
-                      <Trash size={10} weight="bold"/> REMOVE
-                    </button>
+                    <details className="relative" data-testid={`more-emp-${emp.user_id}`}>
+                      <summary className="list-none cursor-pointer text-[10px] label-overline hover:text-foreground">MORE ▾</summary>
+                      <div className="absolute right-0 mt-1 z-20 bg-card border border-border shadow-lg min-w-[160px]">
+                        <button onClick={() => removeEmployee(emp)} className="w-full text-left px-3 py-2 text-xs text-[#FF3B30] hover:bg-[#FF3B30]/10 inline-flex items-center gap-1.5" data-testid={`delete-emp-${emp.user_id}`}>
+                          <Trash size={12} weight="bold"/> Remove employee
+                        </button>
+                      </div>
+                    </details>
                   )}
                 </div>
               </div>
@@ -182,6 +192,7 @@ export default function TeamTab({ isAdmin, currentUserId }) {
           }}/>
       )}
 
+      {removing && <RemoveEmployeeDialog emp={removing} onCancel={() => setRemoving(null)} onConfirm={confirmRemove}/>}
       {viewing && <EmployeeProfileModal emp={viewing} onClose={() => setViewing(null)}/>}
       {editing && (
         <EmployeeEditModal emp={editing} org={org} isAdmin={isAdmin} onClose={() => setEditing(null)}
@@ -328,6 +339,7 @@ function EmployeeFormModal({ org, isAdmin, onClose, onSave }) {
 function EmployeeEditModal({ emp, org, isAdmin, onClose, onSave }) {
   const [shift, setShift] = useState({
     shift_start: emp.shift_start || "", shift_end: emp.shift_end || "", break_max_minutes: emp.break_max_minutes ?? 60,
+    weekly_off: emp.weekly_off ?? [6],
   });
   const [a, setA] = useState({
     name: emp.name || "", email: emp.email || "", department: emp.department || "", site: emp.site || "", manager_id: emp.manager_id || "",
@@ -345,6 +357,19 @@ function EmployeeEditModal({ emp, org, isAdmin, onClose, onSave }) {
           <Field label="Shift Start"><input type="time" value={shift.shift_start} onChange={e => setShift(s => ({ ...s, shift_start: e.target.value }))} className={`${inputCls} font-mono`} data-testid="shift-start-input"/></Field>
           <Field label="Shift End"><input type="time" value={shift.shift_end} onChange={e => setShift(s => ({ ...s, shift_end: e.target.value }))} className={`${inputCls} font-mono`} data-testid="shift-end-input"/></Field>
           <Field label="Break Limit (min)"><input type="number" min="0" max="600" value={shift.break_max_minutes} onChange={e => setShift(s => ({ ...s, break_max_minutes: parseInt(e.target.value || "0", 10) }))} className={`${inputCls} font-mono`} data-testid="break-max-input"/></Field>
+          <div className="sm:col-span-2">
+            <div className="label-overline mb-1.5">Weekly Off</div>
+            <div className="flex flex-wrap gap-1.5" data-testid="weekly-off-picker">
+              {["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].map((d, i) => {
+                const on = shift.weekly_off.includes(i);
+                return (
+                  <button type="button" key={d} data-testid={`weekly-off-${i}`}
+                    onClick={() => setShift(s => ({ ...s, weekly_off: on ? s.weekly_off.filter(x => x !== i) : [...s.weekly_off, i] }))}
+                    className={`px-2.5 py-1 text-xs border transition-colors ${on ? "bg-foreground text-background border-foreground" : "border-border hover:border-foreground"}`}>{d}</button>
+                );
+              })}
+            </div>
+          </div>
           <Field label="Employee Code"><input value={a.employee_code} onChange={setAs("employee_code")} className={inputCls} data-testid="edit-emp-code"/></Field>
           <Field label="Department">
             <select value={a.department} onChange={setAs("department")} className={inputCls} data-testid="edit-emp-dept">

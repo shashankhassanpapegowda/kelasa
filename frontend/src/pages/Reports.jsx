@@ -146,6 +146,7 @@ export default function Reports() {
                   <th className="text-left p-3">Punched At</th>
                   <th className="text-right p-3">Present</th>
                   <th className="text-right p-3">Absent</th>
+                  <th className="text-right p-3" title="Weekly off / no shift days">Off · No shift</th>
                   <th className="text-right p-3">Late Days</th>
                   <th className="text-right p-3">Late Mins</th>
                   <th className="text-right p-3">Net Work</th>
@@ -167,15 +168,19 @@ export default function Reports() {
                     <td className="p-3 text-xs max-w-[220px]">{r.punch_branches || "—"}</td>
                     <td className="p-3 font-mono text-right">{r.present_days}</td>
                     <td className={`p-3 font-mono text-right ${r.absent_days > 0 ? "text-[#FF3B30]" : ""}`}>{r.absent_days}</td>
+                    <td className="p-3 font-mono text-right text-muted-foreground">{r.weekly_off_days} · {r.no_shift_days}</td>
                     <td className={`p-3 font-mono text-right ${r.late_days > 0 ? "text-[#FF3B30]" : ""}`}>{r.late_days}</td>
                     <td className={`p-3 font-mono text-right ${r.total_late_minutes > 0 ? "text-[#FF3B30]" : ""}`}>{r.total_late_minutes}</td>
-                    <td className="p-3 font-mono text-right font-semibold">{fmtHm(r.total_work_minutes)}</td>
+                    <td className="p-3 font-mono text-right font-semibold">
+                      {fmtHm(r.total_work_minutes)}
+                      {r.auto_closed_sessions > 0 && <div className="text-[10px] font-normal text-yellow-700" title="Sessions with a missed checkout were auto-closed at shift end (or 23:59)" data-testid={`auto-closed-${r.user_id}`}>{r.auto_closed_sessions} auto-closed</div>}
+                    </td>
                     <td className="p-3 font-mono text-right">{r.total_break_minutes}m</td>
                     <td className={`p-3 font-mono text-right ${r.over_break_days > 0 ? "text-yellow-700" : ""}`}>{r.over_break_days}</td>
                   </tr>
                 ))}
                 {rows.length === 0 && !loading && (
-                  <tr><td colSpan={10} className="p-8 text-center text-muted-foreground">No data for this date range.</td></tr>
+                  <tr><td colSpan={11} className="p-8 text-center text-muted-foreground">No data for this date range.</td></tr>
                 )}
               </tbody>
             </table>

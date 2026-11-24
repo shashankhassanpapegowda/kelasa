@@ -7,7 +7,7 @@ import CelebrationsCard from "@/components/CelebrationsCard";
 import CelebrationBanner from "@/components/CelebrationBanner";
 import { fmtTime, fmtDuration, fmtAcc, accClass, fmtDay, today } from "@/lib/format";
 import { Users, Pulse, Clock, CheckSquare, WarningCircle, AirplaneTilt, Hourglass } from "@phosphor-icons/react";
-import { AreaChart, Area, BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from "recharts";
+import { AreaChart, Area, BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Legend } from "recharts";
 
 const RANGES = [7, 14, 30];
 
@@ -69,11 +69,12 @@ export default function OverviewTab() {
               </defs>
               <CartesianGrid stroke="currentColor" strokeOpacity={0.08} vertical={false}/>
               <XAxis dataKey="label" tick={{ fontSize: 10, fontFamily: "monospace" }} tickLine={false} axisLine={false} interval="preserveStartEnd"/>
-              <YAxis tick={{ fontSize: 10, fontFamily: "monospace" }} tickLine={false} axisLine={false} allowDecimals={false}/>
+              <YAxis tick={{ fontSize: 11, fontFamily: "monospace" }} tickLine={false} axisLine={false} allowDecimals={false} domain={[0, "dataMax"]}/>
+              <Legend verticalAlign="top" height={28} iconType="plainline" wrapperStyle={{ fontSize: 12 }}/>
               <Tooltip contentStyle={{ fontSize: 12, border: "1px solid var(--border)", borderRadius: 0, background: "var(--card)" }}/>
-              <Area type="monotone" dataKey="present" stroke="#00E676" strokeWidth={2} fill="url(#gPresent)" name="Present"/>
-              <Area type="monotone" dataKey="late" stroke="#FF3B30" strokeWidth={1.5} fillOpacity={0} name="Late"/>
-              <Area type="monotone" dataKey="on_leave" stroke="#0047FF" strokeWidth={1.5} fillOpacity={0} name="On leave"/>
+              <Area type="linear" dataKey="present" stroke="#00E676" strokeWidth={2} fill="url(#gPresent)" name="Present"/>
+              <Area type="linear" dataKey="late" stroke="#FF3B30" strokeWidth={1.5} fillOpacity={0} name="Late"/>
+              <Area type="linear" dataKey="on_leave" stroke="#0047FF" strokeWidth={1.5} fillOpacity={0} name="On leave"/>
             </AreaChart>
           </ResponsiveContainer>
         </div>

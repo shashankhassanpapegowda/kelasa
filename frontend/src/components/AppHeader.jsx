@@ -50,13 +50,7 @@ export default function AppHeader() {
         <div className="flex items-center gap-3">
           <Link to="/profile" className="hidden sm:flex items-center gap-2" data-testid="header-profile-link">
             <AuthPhoto key={user?.avatar_path || "none"} path={user?.avatar_path} className="w-8 h-8 rounded-full object-cover border border-border"
-              fallback={user?.picture ? (
-                <img src={user.picture} alt="" className="w-8 h-8 rounded-full border border-border"/>
-              ) : (
-                <div className="w-8 h-8 rounded-full bg-secondary grid place-items-center text-xs font-medium">
-                  {user?.name?.[0]}
-                </div>
-              )}/>
+              fallback={<div className="w-8 h-8 rounded-full bg-secondary grid place-items-center text-xs font-medium">{user?.name?.[0]}</div>}/>
             <div className="leading-tight">
               <div className="text-sm font-medium" data-testid="user-name">{user?.name}</div>
               <div className="text-[10px] label-overline" data-testid="user-role">{String(user?.role || "").replace("_", "-")}</div>

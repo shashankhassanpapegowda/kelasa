@@ -62,7 +62,7 @@
 
 @layer components {
     .label-overline {
-        @apply text-xs uppercase tracking-[0.18em] text-muted-foreground font-medium;
+        @apply text-xs uppercase tracking-[0.14em] text-foreground/70 font-semibold;
     }
     .grid-card {
         @apply bg-card border border-border;

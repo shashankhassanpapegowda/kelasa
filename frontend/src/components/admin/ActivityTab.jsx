@@ -1,67 +1,128 @@
 import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import { toast } from "sonner";
-import { ClockCounterClockwise } from "@phosphor-icons/react";
+import { ClockCounterClockwise, MagnifyingGlass, CaretLeft, CaretRight } from "@phosphor-icons/react";
 
-const LABELS = {
-  employee_added: "Added employee",
-  employee_removed: "Removed employee",
-  employee_assigned: "Updated assignment",
-  shift_updated: "Updated shift",
-  role_changed: "Changed access level",
-  scope_updated: "Updated sub-admin coverage",
-  leave_approved: "Approved leave",
-  leave_rejected: "Rejected leave",
-  leave_type_added: "Added leave type",
-  password_set: "Set a password",
-  leave_cancelled: "Cancelled leave",
-  leave_type_updated: "Updated leave type",
-  leave_type_removed: "Retired leave type",
-  holiday_added: "Added holiday",
-  holiday_removed: "Removed holiday",
-  announcement_posted: "Posted notice",
-  announcement_removed: "Removed notice",
-  department_added: "Added department",
-  department_removed: "Removed department",
-  site_added: "Added branch",
-  site_removed: "Removed branch",
-  branch_updated: "Updated branch geofence",
-  field_staff_changed: "Changed field staff",
+const VERB = {
+  employee_added: "Added employee {t}",
+  employee_removed: "Removed employee {t}",
+  employee_assigned: "Updated {t}'s details",
+  shift_updated: "Changed {t}'s shift",
+  role_changed: "Changed {t}'s access level",
+  scope_updated: "Updated which teams {t} manages",
+  leave_approved: "Approved leave for {t}",
+  leave_rejected: "Rejected leave for {t}",
+  leave_type_added: "Added leave type {t}",
+  password_set: "Set a password for {t}",
+  site_added: "Added branch {t}",
+  site_removed: "Removed branch {t}",
+  branch_updated: "Updated the location of branch {t}",
+  field_staff_changed: "Changed field-staff access for {t}",
+  geofence_settings: "Changed leaving-area alert timing",
+  bank_approved: "Approved bank details for {t}",
+  bank_rejected: "Rejected bank details for {t}",
+  bank_change_requested: "Submitted new bank details",
+  profile_updated: "Updated profile of {t}",
+  payroll_export: "Downloaded payroll details",
+  holiday_added: "Added holiday {t}",
+  holiday_removed: "Removed holiday {t}",
+  announcement_posted: "Posted notice \"{t}\"",
+  announcement_removed: "Removed notice \"{t}\"",
+  regularization_approved: "Approved attendance correction for {t}",
+  regularization_rejected: "Rejected attendance correction for {t}",
+  employees_imported: "Imported employees from a file",
+  roster_applied: "Applied a shift template to {t}",
+};
+const FIELD = {
+  shift_start: "shift start", shift_end: "shift end", break_max_minutes: "break limit", timezone: "time zone",
+  manager_id: "reporting manager", department: "department", site: "branch", email: "email", name: "name",
+  esi_not_applicable: "ESI not applicable", uan: "UAN", esi: "ESI number", dob: "date of birth",
+  wedding_anniversary: "wedding anniversary", date_of_joining: "joining date", weekly_off: "weekly off",
+};
+const humanAction = (a) => (a || "").replace(/_/g, " ").replace(/^\w/, c => c.toUpperCase());
+
+export const sentence = (e) => {
+  const tmpl = VERB[e.action];
+  const t = e.target_name || "someone";
+  return tmpl ? tmpl.replace("{t}", t) : `${humanAction(e.action)}${e.target_name ? ` — ${e.target_name}` : ""}`;
 };
 
+export const humanDetails = (d) => {
+  if (!d) return "";
+  const parts = d.split(/,\s*/).map(p => {
+    const m = p.match(/^(\w+)=(.*)$/);
+    if (m) {
+      const f = FIELD[m[1]] || m[1].replace(/_/g, " ");
+      const v = m[2];
+      if (v === "None" || v === "") return `${f} cleared`;
+      if (m[1] === "manager_id") return `${f} changed`;
+      return `${f} set to ${v}`;
+    }
+    return FIELD[p] ? `${FIELD[p]} updated` : p.replace(/→/g, " to ").replace(/_/g, " ");
+  });
+  return parts.join(" · ");
+};
+
+const inputCls = "bg-background border border-border px-3 py-2 text-sm";
+
 export default function ActivityTab() {
-  const [entries, setEntries] = useState([]);
+  const [data, setData] = useState({ entries: [], total: 0, actions: [], page: 1, page_size: 25 });
+  const [f, setF] = useState({ action: "", person: "", q: "", from: "", to: "" });
+  const [page, setPage] = useState(1);
 
   useEffect(() => {
-    api.get("/admin/activity").then(r => setEntries(r.data.entries || [])).catch(() => toast.error("Failed to load activity"));
-  }, []);
+    const params = { page, page_size: 25, ...Object.fromEntries(Object.entries(f).filter(([, v]) => v)) };
+    const t = setTimeout(() => {
+      api.get("/admin/activity", { params }).then(r => setData(r.data)).catch(() => toast.error("Failed to load activity"));
+    }, 250);
+    return () => clearTimeout(t);
+  }, [f, page]);
+
+  const set = (k) => (e) => { setPage(1); setF({ ...f, [k]: e.target.value }); };
+  const pages = Math.max(1, Math.ceil(data.total / data.page_size));
 
   return (
-    <div className="border border-border bg-card max-w-3xl" data-testid="activity-tab">
-      <div className="p-4 border-b border-border flex items-center justify-between">
+    <div className="border border-border bg-card w-full" data-testid="activity-tab">
+      <div className="p-4 border-b border-border flex items-center justify-between gap-3 flex-wrap">
         <div className="flex items-center gap-2">
           <ClockCounterClockwise size={16} weight="bold" className="text-primary"/>
           <span className="label-overline">Admin Activity</span>
         </div>
-        <span className="font-mono text-xs text-muted-foreground">{entries.length} EVENTS</span>
+        <span className="font-mono text-xs text-muted-foreground" data-testid="activity-total">{data.total} events</span>
       </div>
-      <div className="divide-y divide-border max-h-[640px] overflow-y-auto" data-testid="activity-list">
-        {entries.map(e => (
-          <div key={e.log_id} className="p-4 flex items-start gap-3" data-testid={`activity-${e.log_id}`}>
-            <div className="font-mono text-[10px] text-muted-foreground w-32 shrink-0 pt-0.5">
-              {new Date(e.created_at).toLocaleString([], { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" })}
+      <div className="p-4 border-b border-border grid sm:grid-cols-2 lg:grid-cols-5 gap-2" data-testid="activity-filters">
+        <div className="relative lg:col-span-2">
+          <MagnifyingGlass size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground"/>
+          <input value={f.q} onChange={set("q")} placeholder="Search activity" className={`${inputCls} w-full pl-8`} data-testid="activity-search"/>
+        </div>
+        <select value={f.action} onChange={set("action")} className={inputCls} data-testid="activity-action-filter">
+          <option value="">All actions</option>
+          {data.actions.map(a => <option key={a} value={a}>{VERB[a] ? VERB[a].replace(/ ?\{t\}'?s?/g, "").replace(/"\s*"/, "").trim() : humanAction(a)}</option>)}
+        </select>
+        <input value={f.person} onChange={set("person")} placeholder="Employee or admin" className={inputCls} data-testid="activity-person-filter"/>
+        <div className="flex gap-2">
+          <input type="date" value={f.from} onChange={set("from")} className={`${inputCls} w-full`} data-testid="activity-from"/>
+          <input type="date" value={f.to} onChange={set("to")} className={`${inputCls} w-full`} data-testid="activity-to"/>
+        </div>
+      </div>
+      <div className="divide-y divide-border" data-testid="activity-list">
+        {data.entries.map(e => (
+          <div key={e.log_id} className="p-4 flex items-start gap-4" data-testid={`activity-${e.log_id}`}>
+            <div className="font-mono text-xs text-foreground/70 w-36 shrink-0 pt-0.5">
+              {new Date(e.created_at).toLocaleString([], { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" })}
             </div>
             <div className="flex-1 min-w-0">
-              <div className="text-sm">
-                <span className="font-medium">{e.actor_name}</span>
-                <span className="text-muted-foreground"> · {LABELS[e.action] || e.action}</span>
-                {e.target_name && <span className="font-medium"> → {e.target_name}</span>}
-              </div>
-              {e.details && <div className="text-[11px] font-mono text-muted-foreground mt-0.5 break-words">{e.details}</div>}
+              <div className="text-sm"><span className="font-medium">{e.actor_name}</span> <span className="text-foreground/80">{sentence(e).replace(/^\w/, c => c.toLowerCase())}</span></div>
+              {e.details && <div className="text-xs text-foreground/65 mt-1 break-words">{humanDetails(e.details)}</div>}
             </div>
           </div>
         ))}
-        {entries.length === 0 && <div className="p-8 text-sm text-muted-foreground text-center">Nothing logged yet.</div>}
+        {data.entries.length === 0 && <div className="p-8 text-sm text-muted-foreground text-center">No activity matches these filters.</div>}
+      </div>
+      <div className="p-3 border-t border-border flex items-center justify-between text-sm">
+        <button onClick={() => setPage(p => Math.max(1, p - 1))} disabled={page <= 1} className="inline-flex items-center gap-1 px-3 py-1.5 border border-border disabled:opacity-40" data-testid="activity-prev"><CaretLeft size={14}/> Newer</button>
+        <span className="font-mono text-xs" data-testid="activity-page">Page {page} of {pages}</span>
+        <button onClick={() => setPage(p => Math.min(pages, p + 1))} disabled={page >= pages} className="inline-flex items-center gap-1 px-3 py-1.5 border border-border disabled:opacity-40" data-testid="activity-next">Older <CaretRight size={14}/></button>
       </div>
     </div>
   );

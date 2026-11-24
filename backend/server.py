@@ -30,6 +30,7 @@ from zoneinfo import ZoneInfo
 import json
 import asyncio
 from pywebpush import webpush, WebPushException
+from attendance_calc import compute_session, session_cap, day_status, DEFAULT_WEEKLY_OFF
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
@@ -132,6 +133,7 @@ class RoleUpdate(BaseModel):
     role: str
 
 class ShiftUpdate(BaseModel):
+    weekly_off: Optional[List[int]] = None
     shift_start: Optional[str] = None  # "HH:MM"
     shift_end: Optional[str] = None    # "HH:MM"
     break_max_minutes: Optional[int] = None
@@ -1042,9 +1044,13 @@ async def check_out(payload: CheckRequest, user: dict = Depends(get_current_user
     if check_in_dt.tzinfo is None:
         check_in_dt = check_in_dt.replace(tzinfo=timezone.utc)
     out_dt = now_utc()
-    total_minutes = int((out_dt - check_in_dt).total_seconds() // 60)
+    tz_name = user.get("timezone") or DEFAULT_TZ
+    auto_closed = out_dt > session_cap(active["check_in"], tz_name, None, None)
+    if auto_closed:
+        out_dt = session_cap(active["check_in"], tz_name, user.get("shift_start"), user.get("shift_end"))
     break_minutes = int(active.get("total_break_minutes", 0))
-    net_minutes = max(total_minutes - break_minutes, 0)
+    calc = compute_session(active["check_in"], out_dt.isoformat(), break_minutes, user.get("shift_start"), user.get("shift_end"))
+    total_minutes, net_minutes = calc["duration_minutes"], calc["net_work_minutes"]
     break_max_raw = user.get("break_max_minutes")
     break_max = int(break_max_raw) if break_max_raw is not None else 60
     over_break = break_minutes > break_max
@@ -1062,6 +1068,9 @@ async def check_out(payload: CheckRequest, user: dict = Depends(get_current_user
             "status": "off_duty",
             "duration_minutes": total_minutes,
             "net_work_minutes": net_minutes,
+            "overtime_minutes": calc["overtime_minutes"],
+            "over_cap": calc["over_cap"],
+            "auto_closed": auto_closed,
             "over_break": over_break,
         }}
     )
@@ -1212,8 +1221,79 @@ async def location_today(user: dict = Depends(get_current_user), date: Optional[
     return {"date": d, "pings": pings}
 
 # ---------- Admin ----------
+async def close_session(rec: dict, u: dict, close_at: datetime, reason: str, extra: Optional[dict] = None):
+    breaks = rec.get("breaks") or []
+    total_break = int(rec.get("total_break_minutes") or 0)
+    if rec.get("on_break") and breaks and not breaks[-1].get("end"):
+        start = parse_iso(breaks[-1]["start"])
+        mins = max(0, int((close_at - start).total_seconds() // 60))
+        breaks[-1].update({"end": close_at.isoformat(), "duration_minutes": mins})
+        total_break = sum((b.get("duration_minutes") or 0) for b in breaks)
+    calc = compute_session(rec["check_in"], close_at.isoformat(), total_break, u.get("shift_start"), u.get("shift_end"))
+    await db.attendance.update_one({"record_id": rec["record_id"]}, {"$set": {
+        "check_out": close_at.isoformat(), "status": "off_duty", "on_break": False, "breaks": breaks,
+        "total_break_minutes": total_break, "auto_closed": True, "auto_close_reason": reason,
+        "over_break": total_break > int(u.get("break_max_minutes") if u.get("break_max_minutes") is not None else 60),
+        **calc, **(extra or {}),
+    }})
+    await resolve_alerts({"record_id": rec["record_id"], "resolved_at": None}, close_at.isoformat(), "auto-closed")
+
+async def auto_close_stale_sessions():
+    now = now_utc()
+    opens = await db.attendance.find({"check_out": None}, {"_id": 0}).to_list(5000)
+    if not opens:
+        return 0
+    users = {u["user_id"]: u for u in await db.users.find(
+        {"user_id": {"$in": list({o["user_id"] for o in opens})}}, {"_id": 0, "face_descriptor": 0}).to_list(5000)}
+    closed = 0
+    for rec in opens:
+        u = users.get(rec["user_id"], {})
+        tz = u.get("timezone") or DEFAULT_TZ
+        if now > session_cap(rec["check_in"], tz, None, None):
+            await close_session(rec, u, session_cap(rec["check_in"], tz, u.get("shift_start"), u.get("shift_end")), "missed checkout")
+            closed += 1
+    return closed
+
+async def recalc_attendance_migration():
+    key = "recalc_work_hours_v1"
+    if await db.migrations.find_one({"key": key}):
+        return
+    users = {u["user_id"]: u for u in await db.users.find({}, {"_id": 0, "face_descriptor": 0}).to_list(10000)}
+    fixed = 0
+    async for rec in db.attendance.find({"check_out": {"$ne": None}}, {"_id": 0}):
+        u = users.get(rec["user_id"], {})
+        tz = u.get("timezone") or DEFAULT_TZ
+        day_cap = session_cap(rec["check_in"], tz, None, None)
+        if parse_iso(rec["check_out"]) > day_cap:
+            await close_session(rec, u, session_cap(rec["check_in"], tz, u.get("shift_start"), u.get("shift_end")),
+                                "missed checkout (recalculated)", {"original_check_out": rec["check_out"]})
+            fixed += 1
+        else:
+            calc = compute_session(rec["check_in"], rec["check_out"], rec.get("total_break_minutes") or 0,
+                                   u.get("shift_start"), u.get("shift_end"))
+            await db.attendance.update_one({"record_id": rec["record_id"]}, {"$set": calc})
+    await db.migrations.insert_one({"key": key, "applied_at": now_utc().isoformat(), "reclosed": fixed})
+    logger.info(f"Attendance recalculation done, {fixed} sessions re-closed")
+
+async def auto_close_loop():
+    while True:
+        try:
+            await auto_close_stale_sessions()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(f"auto-close failed: {exc}")
+        await asyncio.sleep(300)
+
+def running_minutes(rec: dict, now: datetime) -> int:
+    total = int((now - parse_iso(rec["check_in"])).total_seconds() // 60)
+    brk = int(rec.get("total_break_minutes") or 0)
+    breaks = rec.get("breaks") or []
+    if rec.get("on_break") and breaks and not breaks[-1].get("end"):
+        brk += int((now - parse_iso(breaks[-1]["start"])).total_seconds() // 60)
+    return max(0, min(total - brk, 16 * 60))
+
 @api_router.get("/admin/stats")
 async def admin_stats(user: dict = Depends(require_manager)):
+    await auto_close_stale_sessions()
     today = user_local_today(user)
     ids = await scoped_user_ids(user)
     uf = user_filter(ids)
@@ -1227,7 +1307,10 @@ async def admin_stats(user: dict = Depends(require_manager)):
     cursor = db.attendance.aggregate(pipeline)
     total_minutes = 0
     async for row in cursor:
-        total_minutes = row.get("total", 0)
+        total_minutes = row.get("total", 0) or 0
+    now = now_utc()
+    for rec in await db.attendance.find({"check_out": None, **uf}, {"_id": 0}).to_list(2000):
+        total_minutes += running_minutes(rec, now)
     late_today = await db.attendance.count_documents({"date": today, "late_by_minutes": {"$gt": 0}, **uf})
     leave_q = {"status": "approved", "start_date": {"$lte": today}, "end_date": {"$gte": today}, **uf}
     on_leave_today = await db.leave_requests.count_documents(leave_q)
@@ -1322,6 +1405,10 @@ async def admin_set_shift(user_id: str, payload: ShiftUpdate, user: dict = Depen
         except Exception:
             raise HTTPException(status_code=400, detail="Invalid timezone") from None
         updates["timezone"] = payload.timezone
+    if payload.weekly_off is not None:
+        if any(d not in range(7) for d in payload.weekly_off):
+            raise HTTPException(status_code=400, detail="Weekly off days must be 0 (Mon) to 6 (Sun)")
+        updates["weekly_off"] = sorted(set(payload.weekly_off))
     if not updates:
         raise HTTPException(status_code=400, detail="No fields to update")
     res = await db.users.update_one({"user_id": user_id}, {"$set": updates})
@@ -1627,11 +1714,11 @@ async def admin_delete_employee(user_id: str, user: dict = Depends(require_manag
         raise HTTPException(status_code=404, detail="Employee not found")
     if emp.get("role") == "admin" and user.get("role") != "admin":
         raise HTTPException(status_code=403, detail="Only an admin can remove another admin")
+    full = await db.users.find_one({"user_id": user_id}, {"_id": 0})
+    await db.removed_users.insert_one({**full, "removed_at": now_utc().isoformat(), "removed_by": user.get("name")})
     await db.users.delete_one({"user_id": user_id})
     await db.user_sessions.delete_many({"user_id": user_id})
-    await db.attendance.delete_many({"user_id": user_id})
-    await db.locations.delete_many({"user_id": user_id})
-    await db.leave_requests.delete_many({"user_id": user_id})
+    await db.push_subscriptions.delete_many({"user_id": user_id})
     await db.users.update_many({"manager_id": user_id}, {"$set": {"manager_id": None}})
     await log_activity(user, "employee_removed", emp.get("name", user_id))
     return {"ok": True}
@@ -2011,9 +2098,32 @@ async def delete_announcement(announcement_id: str, user: dict = Depends(require
 
 # ---------- Activity log ----------
 @api_router.get("/admin/activity")
-async def admin_activity(user: dict = Depends(require_admin), limit: int = 200):
-    docs = await db.activity_log.find({}, {"_id": 0}).sort("created_at", -1).to_list(limit)
-    return {"entries": docs}
+async def admin_activity(
+    user: dict = Depends(require_admin),
+    action: Optional[str] = None, person: Optional[str] = None, q: Optional[str] = None,
+    from_date: Optional[str] = Query(None, alias="from"), to_date: Optional[str] = Query(None, alias="to"),
+    page: int = Query(1, ge=1), page_size: int = Query(25, ge=5, le=100),
+):
+    filt: dict = {}
+    if action:
+        filt["action"] = action
+    if person:
+        rx = {"$regex": re.escape(person), "$options": "i"}
+        filt["$or"] = [{"actor_name": rx}, {"target_name": rx}]
+    if q:
+        rx = {"$regex": re.escape(q), "$options": "i"}
+        filt.setdefault("$and", []).append({"$or": [{"actor_name": rx}, {"target_name": rx}, {"details": rx}, {"action": rx}]})
+    if from_date or to_date:
+        rng = {}
+        if from_date:
+            rng["$gte"] = from_date
+        if to_date:
+            rng["$lte"] = to_date + "T23:59:59.999999+99:99"
+        filt["created_at"] = rng
+    total = await db.activity_log.count_documents(filt)
+    docs = await db.activity_log.find(filt, {"_id": 0}).sort("created_at", -1).skip((page - 1) * page_size).to_list(page_size)
+    actions = sorted(await db.activity_log.distinct("action"))
+    return {"entries": docs, "total": total, "page": page, "page_size": page_size, "actions": actions}
 
 # ---------- Analytics ----------
 @api_router.get("/admin/analytics")
@@ -2081,6 +2191,7 @@ async def admin_analytics(days: int = 14, user: dict = Depends(require_manager))
 # ---------- Reports ----------
 async def build_report(from_date: str, to_date: str, user_ids=None) -> List[dict]:
     """Build per-employee aggregated report for date range (inclusive)."""
+    await auto_close_stale_sessions()
     uf = user_filter(user_ids)
     users = await db.users.find(uf, {"_id": 0, "face_descriptor": 0, "password_hash": 0}).to_list(1000)
     # All records in range
@@ -2114,13 +2225,26 @@ async def build_report(from_date: str, to_date: str, user_ids=None) -> List[dict
             leave_dates_by_user.setdefault(lv["user_id"], set()).add(cur.isoformat())
             cur += timedelta(days=1)
 
+    joined = {p["user_id"]: p.get("date_of_joining") for p in await db.employee_profiles.find(
+        {"user_id": {"$in": [u["user_id"] for u in users]}}, {"_id": 0, "user_id": 1, "date_of_joining": 1}).to_list(5000)}
+    today_d = datetime.now(ZoneInfo(DEFAULT_TZ)).date()
     rows = []
     for u in users:
         recs = by_user.get(u["user_id"], [])
         present_dates = {r["date"] for r in recs}
         leave_dates = leave_dates_by_user.get(u["user_id"], set())
-        absent_days = len(all_dates - present_dates - leave_dates - holiday_dates)
-        late_days = sum(1 for r in recs if (r.get("late_by_minutes") or 0) > 0)
+        has_shift = bool(u.get("shift_start"))
+        late_dates = {r["date"] for r in recs if has_shift and (r.get("late_by_minutes") or 0) > 0}
+        jd = joined.get(u["user_id"]) or (u.get("created_at") or "")[:10] or None
+        counts: dict = {}
+        for d in all_dates:
+            st = day_status(ddate.fromisoformat(d), today=today_d, present=d in present_dates, late=d in late_dates,
+                            on_leave=d in leave_dates, holiday=d in holiday_dates,
+                            weekly_off=u.get("weekly_off", DEFAULT_WEEKLY_OFF), has_shift=has_shift,
+                            joined=ddate.fromisoformat(jd) if jd else None, pending_invite=bool(u.get("pending_invite")))
+            counts[st] = counts.get(st, 0) + 1
+        absent_days = counts.get("absent", 0)
+        late_days = len(late_dates)
         total_late = sum((r.get("late_by_minutes") or 0) for r in recs)
         total_work = sum((r.get("net_work_minutes") or 0) for r in recs)
         total_break = sum((r.get("total_break_minutes") or 0) for r in recs)
@@ -2143,6 +2267,11 @@ async def build_report(from_date: str, to_date: str, user_ids=None) -> List[dict
             "leave_days": len(leave_dates),
             "holiday_days": len(holiday_dates),
             "absent_days": absent_days,
+            "weekly_off_days": counts.get("weekly_off", 0),
+            "no_shift_days": counts.get("no_shift", 0),
+            "overtime_minutes": sum((r.get("overtime_minutes") or 0) for r in recs),
+            "auto_closed_sessions": sum(1 for r in recs if r.get("auto_closed")),
+            "over_cap_sessions": sum(1 for r in recs if r.get("over_cap")),
             "late_days": late_days,
             "total_late_minutes": total_late,
             "total_work_minutes": total_work,
@@ -2153,13 +2282,20 @@ async def build_report(from_date: str, to_date: str, user_ids=None) -> List[dict
     rows.sort(key=lambda x: x["name"].lower())
     return rows
 
+def filter_report_rows(rows: List[dict], branch: Optional[str], department: Optional[str], employee: Optional[str]) -> List[dict]:
+    return [r for r in rows if (not branch or r.get("site") == branch)
+            and (not department or r.get("department") == department) and (not employee or r["user_id"] == employee)]
+
 @api_router.get("/admin/reports")
 async def admin_reports(
     from_date: str = Query(..., alias="from"),
     to_date: str = Query(..., alias="to"),
+    branch: Optional[str] = None,
+    department: Optional[str] = None,
+    employee: Optional[str] = None,
     user: dict = Depends(require_manager),
 ):
-    rows = await build_report(from_date, to_date, await scoped_user_ids(user))
+    rows = filter_report_rows(await build_report(from_date, to_date, await scoped_user_ids(user)), branch, department, employee)
     return {"from": from_date, "to": to_date, "rows": rows}
 
 @api_router.get("/admin/reports.csv")
@@ -2168,6 +2304,9 @@ async def admin_reports_csv(
     to_date: str = Query(..., alias="to"),
     request: Request = None,
     auth: Optional[str] = Query(None),
+    branch: Optional[str] = None,
+    department: Optional[str] = None,
+    employee: Optional[str] = None,
 ):
     # Manual auth so we can support browser download with ?auth= token
     token = request.cookies.get("session_token") if request else None
@@ -2186,13 +2325,13 @@ async def admin_reports_csv(
     if not u or u.get("role") not in ("admin", "sub_admin"):
         raise HTTPException(status_code=403, detail="Admin only")
 
-    rows = await build_report(from_date, to_date, await scoped_user_ids(u))
+    rows = filter_report_rows(await build_report(from_date, to_date, await scoped_user_ids(u)), branch, department, employee)
     buf = io.StringIO()
     writer = csv.writer(buf)
     writer.writerow([
         "Employee", "Email", "Department", "Home Branch", "Punched At", "Shift Start", "Shift End", "Break Limit (min)",
-        "Present Days", "Leave Days", "Holidays", "Absent Days", "Late Days", "Total Late (min)",
-        "Total Work (h:m)", "Total Break (min)", "Over-Break Days", "Sessions",
+        "Present Days", "Leave Days", "Holidays", "Weekly Off Days", "No Shift Days", "Absent Days", "Late Days", "Total Late (min)",
+        "Total Work (h:m)", "Total Break (min)", "Over-Break Days", "Sessions", "Auto-closed (missed checkout)",
     ])
     for r in rows:
         hours = (r["total_work_minutes"] or 0) // 60
@@ -2200,9 +2339,10 @@ async def admin_reports_csv(
         writer.writerow([
             r["name"], r["email"], r.get("department") or "", r.get("site") or "", r.get("punch_branches") or "",
             r["shift_start"] or "", r["shift_end"] or "",
-            r["break_max_minutes"], r["present_days"], r["leave_days"], r["holiday_days"], r["absent_days"],
+            r["break_max_minutes"], r["present_days"], r["leave_days"], r["holiday_days"], r["weekly_off_days"], r["no_shift_days"], r["absent_days"],
             r["late_days"], r["total_late_minutes"],
-            f"{hours}h {mins}m", r["total_break_minutes"], r["over_break_days"], r["sessions"],
+            f"{hours}h {mins}m",
+            r["total_break_minutes"], r["over_break_days"], r["sessions"], r["auto_closed_sessions"],
         ])
     buf.seek(0)
     filename = f"attendance_report_{from_date}_to_{to_date}.csv"
@@ -2493,6 +2633,8 @@ def clean_profile(payload: ProfileUpdate, today_iso: str) -> dict:
         if v and not re.fullmatch(r"\d{10}|\d{17}", v):
             raise HTTPException(status_code=400, detail="ESI number must be 10 or 17 digits")
         out["esi"] = v or None
+        if v:
+            out["esi_not_applicable"] = False
     if data.get("esi_not_applicable") is not None:
         out["esi_not_applicable"] = bool(data["esi_not_applicable"])
         if out["esi_not_applicable"]:
@@ -2928,6 +3070,8 @@ app.add_middleware(
 async def startup():
     init_storage()
     await ensure_indexes()
+    await recalc_attendance_migration()
+    _track(asyncio.create_task(auto_close_loop()))
     await seed_admin_password()
     await seed_leave_types()
 
