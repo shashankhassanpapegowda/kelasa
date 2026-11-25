@@ -1,6 +1,19 @@
 self.addEventListener("install", () => self.skipWaiting());
 self.addEventListener("activate", (event) => event.waitUntil(self.clients.claim()));
 
+// Face models are large and never change, so serve them cache-first.
+self.addEventListener("fetch", (event) => {
+  const url = new URL(event.request.url);
+  if (event.request.method !== "GET" || url.origin !== self.location.origin || !url.pathname.startsWith("/models/")) return;
+  event.respondWith(caches.open("kelasa-face-models-v1").then(async (cache) => {
+    const hit = await cache.match(event.request);
+    if (hit) return hit;
+    const res = await fetch(event.request);
+    if (res.ok) cache.put(event.request, res.clone());
+    return res;
+  }));
+});
+
 self.addEventListener("push", (event) => {
   let data = {};
   try { data = event.data ? event.data.json() : {}; } catch (_) { /* plain text */ }

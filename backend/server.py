@@ -49,7 +49,8 @@ DEFAULT_TZ = "Asia/Kolkata"
 LATE_GRACE_MINUTES = 15
 
 # ---------- Object Storage ----------
-STORAGE_URL = "https://integrations.emergentagent.com/objstore/api/v1/storage"
+STORAGE_BASE = (os.environ.get("INTEGRATION_PROXY_URL") or "").strip() or "https://integrations.emergentagent.com"
+STORAGE_URL = STORAGE_BASE.rstrip("/") + "/objstore/api/v1/storage"
 EMERGENT_KEY = os.environ.get("EMERGENT_LLM_KEY")
 APP_NAME = "gtg-attendance"
 storage_key = None
@@ -110,15 +111,27 @@ def get_object(path: str):
 
 # ---------- Models ----------
 class FaceEnrollRequest(BaseModel):
-    descriptor: List[float]
+    descriptors: List[List[float]]
     image_b64: str
+
+class Liveness(BaseModel):
+    challenge: Literal["blink", "turn"]
+    passed: bool
+    duration_ms: Optional[int] = None
+    low_light: Optional[bool] = None
 
 class CheckRequest(BaseModel):
     lat: float
     lng: float
     accuracy: Optional[float] = None
-    descriptor: List[float]
+    descriptors: List[List[float]]
     image_b64: str
+    liveness: Optional[Liveness] = None
+
+class FaceReviewIn(BaseModel):
+    kind: Literal["in", "out"]
+    decision: Literal["ok", "mismatch"]
+    note: Optional[str] = None
 
 class LocationPing(BaseModel):
     lat: float
@@ -498,6 +511,72 @@ def euclidean(a: List[float], b: List[float]) -> float:
     return math.sqrt(sum((x - y) ** 2 for x, y in zip(a, b)))
 
 FACE_MATCH_THRESHOLD = float(os.environ.get("FACE_MATCH_THRESHOLD", "0.55"))
+FACE_CLEAN = 0.45      # at or below: confident match
+FACE_LEARN = 0.40      # at or below (and live): add this capture to the person's learned faces
+FACE_SAME_PERSON = 0.6 # max spread between frames of one capture
+FACE_LEARNED_KEEP = 10
+SELFIE_KEEP_DAYS = 7
+
+def mean_descriptor(ds: List[List[float]]) -> List[float]:
+    return [sum(c) / len(ds) for c in zip(*ds)]
+
+def face_score(desc: List[float], templates: List[List[float]]) -> float:
+    ds = sorted(euclidean(desc, t) for t in templates)
+    if not ds:
+        return 9999.0
+    return ds[0] if len(ds) == 1 else (ds[0] + ds[1]) / 2
+
+def validate_descriptors(ds: List[List[float]], min_count: int) -> List[float]:
+    if len(ds) < min_count or len(ds) > 6 or any(len(d) != 128 or not all(math.isfinite(x) for x in d) for d in ds):
+        raise HTTPException(status_code=400, detail="Invalid face data. Please refresh the app and try again.")
+    if max((euclidean(a, b) for i, a in enumerate(ds) for b in ds[i + 1:]), default=0) > FACE_SAME_PERSON:
+        raise HTTPException(status_code=400, detail="The face changed during the check. Keep only your face in the frame and try again.")
+    return mean_descriptor(ds)
+
+async def face_templates_of(user_id: str, legacy: Optional[List[float]] = None) -> List[List[float]]:
+    prof = await db.face_profiles.find_one({"user_id": user_id}, {"_id": 0})
+    if prof:
+        return (prof.get("templates") or []) + (prof.get("learned") or [])
+    return [legacy] if legacy else []
+
+async def closest_other(user_id: str, desc: List[float]) -> tuple:
+    best, best_uid = 9999.0, None
+    async for prof in db.face_profiles.find({"user_id": {"$ne": user_id}}, {"_id": 0}):
+        sc = face_score(desc, (prof.get("templates") or []) + (prof.get("learned") or []))
+        if sc < best:
+            best, best_uid = sc, prof["user_id"]
+    return best, best_uid
+
+async def verify_face(user: dict, payload: "CheckRequest") -> dict:
+    if not user.get("face_enrolled"):
+        raise HTTPException(status_code=400, detail="Face not enrolled. Please complete face enrollment first.")
+    if not payload.liveness or not payload.liveness.passed:
+        raise HTTPException(status_code=400, detail="Live check missing. Please refresh the app and try again.")
+    desc = validate_descriptors(payload.descriptors, 2)
+    score = face_score(desc, await face_templates_of(user["user_id"], user.get("face_descriptor")))
+    if score > FACE_MATCH_THRESHOLD:
+        raise HTTPException(status_code=403, detail="Face doesn't match. Face a light, remove helmet or mask, hold the phone at eye level and try again.")
+    other, other_uid = await closest_other(user["user_id"], desc)
+    if other < score and other <= FACE_CLEAN:
+        await log_activity(user, "face_blocked", user.get("name") or user["user_id"], f"looked like another employee ({other_uid})")
+        raise HTTPException(status_code=403, detail="This face looks like a different employee. Each person must check in with their own face.")
+    reasons = []
+    if score > FACE_CLEAN:
+        reasons.append("borderline match")
+    if other <= FACE_MATCH_THRESHOLD and other - score < 0.08:
+        reasons.append("close to another employee")
+    return {"desc": desc, "score": round(score, 4), "flagged": bool(reasons), "reason": ", ".join(reasons) or None,
+            "challenge": payload.liveness.challenge, "low_light": bool(payload.liveness.low_light)}
+
+async def learn_face(user_id: str, check: dict):
+    if check["score"] <= FACE_LEARN and not check["flagged"]:
+        await db.face_profiles.update_one({"user_id": user_id},
+                                          {"$push": {"learned": {"$each": [check["desc"]], "$slice": -FACE_LEARNED_KEEP}}})
+
+def face_fields(prefix: str, check: dict) -> dict:
+    return {f"{prefix}_face_distance": check["score"], f"{prefix}_face_review": check["flagged"],
+            f"{prefix}_face_review_reason": check["reason"], f"{prefix}_liveness": check["challenge"],
+            f"{prefix}_low_light": check["low_light"]}
 
 async def get_current_user(request: Request) -> dict:
     token = request.cookies.get("session_token")
@@ -585,6 +664,13 @@ async def log_activity(actor: dict, action: str, target_name: str = "", details:
         "details": details,
         "created_at": now_utc().isoformat(),
     })
+
+def scrub_object(path: str):
+    """Storage has no delete API, so overwrite the photo with an empty file."""
+    try:
+        put_object(path, b"", "image/jpeg")
+    except Exception as e:
+        logger.warning(f"Could not scrub {path}: {e}")
 
 def upload_face_image(user_id: str, image_b64: str, kind: str) -> str:
     if image_b64.startswith("data:"):
@@ -916,18 +1002,41 @@ async def ensure_indexes():
     await db.login_attempts.create_index("identifier", unique=True)
 
 # ---------- Face ----------
+async def migrate_face_profiles():
+    await db.face_profiles.create_index("user_id", unique=True)
+    n = 0
+    async for u in db.users.find({"face_enrolled": True, "face_descriptor": {"$ne": None}}, {"_id": 0, "user_id": 1, "face_descriptor": 1}):
+        res = await db.face_profiles.update_one({"user_id": u["user_id"]}, {"$setOnInsert": {
+            "templates": [u["face_descriptor"]], "learned": [], "migrated": True, "updated_at": now_utc().isoformat()}}, upsert=True)
+        n += 1 if res.upserted_id else 0
+    if n:
+        logger.info(f"Face profiles migrated for {n} users")
+
 @api_router.post("/face/enroll")
 async def face_enroll(payload: FaceEnrollRequest, user: dict = Depends(get_current_user)):
-    if len(payload.descriptor) != 128:
-        raise HTTPException(status_code=400, detail="Invalid face descriptor")
+    if user.get("face_enrolled"):
+        raise HTTPException(status_code=403, detail="Your face is already enrolled. Ask your manager to reset it first.")
+    if len(payload.descriptors) < 3:
+        raise HTTPException(status_code=400, detail="Enrolment needs 3 photos. Please refresh the app and try again.")
+    for d in payload.descriptors:
+        validate_descriptors([d], 1)
+    if max(euclidean(a, b) for i, a in enumerate(payload.descriptors) for b in payload.descriptors[i + 1:]) > FACE_SAME_PERSON:
+        raise HTTPException(status_code=400, detail="The 3 photos don't look like the same person. Keep only your face in the frame and try again.")
+    other, other_uid = await closest_other(user["user_id"], mean_descriptor(payload.descriptors))
+    if other <= FACE_LEARN:
+        await log_activity(user, "face_enroll_blocked", user.get("name") or user["user_id"], f"matched another employee ({other_uid})")
+        raise HTTPException(status_code=409, detail="This face is already enrolled for another employee. Ask your manager for help.")
     photo_path = upload_face_image(user["user_id"], payload.image_b64, "enrollment")
+    await db.face_profiles.update_one({"user_id": user["user_id"]}, {"$set": {
+        "templates": payload.descriptors, "learned": [], "updated_at": now_utc().isoformat()}}, upsert=True)
     await db.users.update_one(
         {"user_id": user["user_id"]},
         {"$set": {
             "face_enrolled": True,
-            "face_descriptor": payload.descriptor,
+            "face_descriptor": mean_descriptor(payload.descriptors),
             "face_photo_path": photo_path,
             "face_enrolled_at": now_utc().isoformat(),
+            "face_template_count": len(payload.descriptors),
         }}
     )
     return {"ok": True, "photo_path": photo_path}
@@ -967,14 +1076,7 @@ async def download_file(path: str, request: Request, auth: Optional[str] = Query
 # ---------- Attendance ----------
 @api_router.post("/attendance/checkin")
 async def check_in(payload: CheckRequest, user: dict = Depends(get_current_user)):
-    if not user.get("face_enrolled"):
-        raise HTTPException(status_code=400, detail="Face not enrolled. Please complete face enrollment first.")
-    if len(payload.descriptor) != 128:
-        raise HTTPException(status_code=400, detail="Invalid face data")
-    stored_desc = user.get("face_descriptor") or []
-    dist = euclidean(payload.descriptor, stored_desc)
-    if dist > FACE_MATCH_THRESHOLD:
-        raise HTTPException(status_code=403, detail=f"Face does not match enrolled face (score: {dist:.2f}). Please try again.")
+    check = await verify_face(user, payload)
 
     active = await db.attendance.find_one(
         {"user_id": user["user_id"], "check_out": None}, {"_id": 0},
@@ -998,7 +1100,7 @@ async def check_in(payload: CheckRequest, user: dict = Depends(get_current_user)
         "check_in_lng": payload.lng,
         "check_in_accuracy": payload.accuracy,
         "check_in_photo_path": photo_path,
-        "check_in_face_distance": round(dist, 4),
+        **face_fields("check_in", check),
         "check_in_branch": branch,
         "check_out": None,
         "status": "on_duty",
@@ -1018,18 +1120,12 @@ async def check_in(payload: CheckRequest, user: dict = Depends(get_current_user)
         "accuracy": payload.accuracy,
         "timestamp": check_in_iso,
     })
-    return {"ok": True, "record_id": record_id, "face_distance": round(dist, 4), "late_by_minutes": late_by}
+    await learn_face(user["user_id"], check)
+    return {"ok": True, "record_id": record_id, "face_distance": check["score"], "face_review": check["flagged"], "late_by_minutes": late_by}
 
 @api_router.post("/attendance/checkout")
 async def check_out(payload: CheckRequest, user: dict = Depends(get_current_user)):
-    if not user.get("face_enrolled"):
-        raise HTTPException(status_code=400, detail="Face not enrolled")
-    if len(payload.descriptor) != 128:
-        raise HTTPException(status_code=400, detail="Invalid face data")
-    stored_desc = user.get("face_descriptor") or []
-    dist = euclidean(payload.descriptor, stored_desc)
-    if dist > FACE_MATCH_THRESHOLD:
-        raise HTTPException(status_code=403, detail=f"Face does not match enrolled face (score: {dist:.2f}). Please try again.")
+    check = await verify_face(user, payload)
 
     active = await db.attendance.find_one(
         {"user_id": user["user_id"], "check_out": None}, {"_id": 0},
@@ -1065,7 +1161,7 @@ async def check_out(payload: CheckRequest, user: dict = Depends(get_current_user
             "check_out_lng": payload.lng,
             "check_out_accuracy": payload.accuracy,
             "check_out_photo_path": photo_path,
-            "check_out_face_distance": round(dist, 4),
+            **face_fields("check_out", check),
             "check_out_branch": branch,
             "status": "off_duty",
             "duration_minutes": total_minutes,
@@ -1515,13 +1611,98 @@ async def admin_attendance(date: Optional[str] = None, user: dict = Depends(requ
 @api_router.delete("/admin/employees/{user_id}/face")
 async def admin_reset_face(user_id: str, user: dict = Depends(require_manager)):
     await ensure_manages_other(user, user_id)
-    res = await db.users.update_one(
+    emp = await db.users.find_one({"user_id": user_id}, {"_id": 0, "face_photo_path": 1, "name": 1})
+    if not emp:
+        raise HTTPException(status_code=404, detail="User not found")
+    await db.users.update_one(
         {"user_id": user_id},
         {"$set": {"face_enrolled": False, "face_descriptor": None, "face_photo_path": None}}
     )
-    if res.matched_count == 0:
-        raise HTTPException(status_code=404, detail="User not found")
+    await db.face_profiles.delete_one({"user_id": user_id})
+    if emp.get("face_photo_path"):
+        await asyncio.to_thread(scrub_object, emp["face_photo_path"])
+    await log_activity(user, "face_reset", emp.get("name") or user_id)
     return {"ok": True}
+
+# ---------- Face check review ----------
+@api_router.get("/admin/face-checks")
+async def admin_face_checks(user: dict = Depends(require_manager), flagged: bool = False, person: Optional[str] = None,
+                            from_date: Optional[str] = Query(None, alias="from"), to_date: Optional[str] = Query(None, alias="to"),
+                            page: int = Query(1, ge=1), page_size: int = Query(24, ge=1, le=100)):
+    ids = await scoped_user_ids(user)
+    if person:
+        ids = [person] if ids is None or person in ids else []
+    q: dict = {**user_filter(ids)}
+    if from_date or to_date:
+        q["date"] = {k: v for k, v in (("$gte", from_date), ("$lte", to_date)) if v}
+    q["$or"] = ([{"check_in_face_review": True}, {"check_out_face_review": True}] if flagged else
+                [{"check_in_photo_path": {"$ne": None}}, {"check_out_photo_path": {"$ne": None}},
+                 {"check_in_face_review": True}, {"check_out_face_review": True}])
+    total = await db.attendance.count_documents(q)
+    recs = await db.attendance.find(q, {"_id": 0}).sort("check_in", -1).skip((page - 1) * page_size).limit(page_size).to_list(page_size)
+    users = {u["user_id"]: u for u in await db.users.find({"user_id": {"$in": list({r["user_id"] for r in recs})}},
+             {"_id": 0, "user_id": 1, "name": 1, "email": 1, "face_photo_path": 1, "avatar_path": 1, "site": 1}).to_list(500)}
+    pending = await db.attendance.count_documents({**{k: v for k, v in q.items() if k != "$or"}, "$or": [
+        {"check_in_face_review": True, "check_in_face_review_status": None},
+        {"check_out_face_review": True, "check_out_face_review_status": None}]})
+    items = []
+    for r in recs:
+        u = users.get(r["user_id"], {})
+        items.append({**{k: r.get(k) for k in (
+            "record_id", "user_id", "date", "check_in", "check_out", "check_in_photo_path", "check_out_photo_path",
+            "check_in_face_distance", "check_out_face_distance", "check_in_face_review", "check_out_face_review",
+            "check_in_face_review_reason", "check_out_face_review_reason", "check_in_face_review_status",
+            "check_out_face_review_status", "check_in_liveness", "check_out_liveness", "check_in_low_light",
+            "check_out_low_light", "check_in_lat", "check_in_lng", "check_out_lat", "check_out_lng",
+            "check_in_accuracy", "check_out_accuracy", "photos_purged_at")},
+            "name": u.get("name") or u.get("email"), "site": u.get("site"), "enrollment_photo_path": u.get("face_photo_path")})
+    return {"items": items, "total": total, "page": page, "page_size": page_size, "pending_review": pending,
+            "keep_days": SELFIE_KEEP_DAYS}
+
+@api_router.post("/admin/face-checks/{record_id}")
+async def admin_face_review(record_id: str, payload: FaceReviewIn, user: dict = Depends(require_manager)):
+    rec = await db.attendance.find_one({"record_id": record_id}, {"_id": 0, "user_id": 1, "date": 1})
+    if not rec:
+        raise HTTPException(status_code=404, detail="Not found")
+    await ensure_in_scope(user, rec["user_id"])
+    pre = f"check_{payload.kind}"
+    await db.attendance.update_one({"record_id": record_id}, {"$set": {
+        f"{pre}_face_review_status": payload.decision, f"{pre}_face_reviewed_by": user["user_id"],
+        f"{pre}_face_reviewed_at": now_utc().isoformat(), f"{pre}_face_review_note": (payload.note or "").strip() or None}})
+    emp = await db.users.find_one({"user_id": rec["user_id"]}, {"_id": 0, "name": 1})
+    await log_activity(user, "face_review_ok" if payload.decision == "ok" else "face_review_mismatch",
+                       (emp or {}).get("name") or rec["user_id"], f"{rec['date']} check-{payload.kind}" + (f" · {payload.note.strip()}" if (payload.note or "").strip() else ""))
+    return {"ok": True}
+
+# ---------- Selfie retention ----------
+async def run_selfie_purge() -> int:
+    cutoff = (now_utc() - timedelta(days=SELFIE_KEEP_DAYS)).isoformat()
+    recs = await db.attendance.find({"check_in": {"$lt": cutoff}, "$or": [
+        {"check_in_photo_path": {"$ne": None}}, {"check_out_photo_path": {"$ne": None}}]},
+        {"_id": 0, "record_id": 1, "check_in_photo_path": 1, "check_out_photo_path": 1}).to_list(5000)
+    for r in recs:
+        for k in ("check_in_photo_path", "check_out_photo_path"):
+            if r.get(k):
+                await asyncio.to_thread(scrub_object, r[k])
+        await db.attendance.update_one({"record_id": r["record_id"]}, {"$set": {
+            "check_in_photo_path": None, "check_out_photo_path": None, "photos_purged_at": now_utc().isoformat()}})
+    if recs:
+        logger.info(f"Selfie purge: cleared photos on {len(recs)} attendance records")
+    return len(recs)
+
+@api_router.post("/cron/selfie-purge")
+async def cron_selfie_purge(request: Request):
+    # Cron endpoints must ack 2xx immediately; enqueue/background the actual work.
+    if not _cron_authorized(request):
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    try:
+        envelope = await request.json()
+    except ValueError:
+        envelope = None
+    if envelope is not None and not isinstance(envelope, dict):
+        raise HTTPException(status_code=400, detail="Invalid body")
+    _track(asyncio.create_task(run_selfie_purge()))
+    return {"ok": True, "queued": True}
 
 # ---------- Organisation ----------
 @api_router.get("/admin/org")
@@ -3271,6 +3452,8 @@ async def startup():
     init_storage()
     await ensure_indexes()
     await recalc_attendance_migration()
+    await migrate_face_profiles()
+    _track(asyncio.create_task(run_selfie_purge()))
     _track(asyncio.create_task(auto_close_loop()))
     await seed_admin_password()
     await seed_leave_types()

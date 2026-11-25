@@ -11,6 +11,7 @@ import { toast } from "sonner";
 import { useAuth } from "@/lib/auth";
 import { useNavigate } from "react-router-dom";
 import { getAccuratePosition, startLiveWatch } from "@/lib/geo";
+import { preloadFaceModels } from "@/lib/face";
 import { Camera, Clock, Path as PathIcon, MapPin, ArrowsClockwise, GpsFix, WarningCircle, Coffee, ArrowCounterClockwise, Megaphone, PushPin } from "@phosphor-icons/react";
 
 const PING_INTERVAL_MS = 30_000;
@@ -90,7 +91,7 @@ export default function Dashboard() {
     setHistory(h.data.records || []);
   };
 
-  useEffect(() => { refresh(); }, []);
+  useEffect(() => { refresh(); preloadFaceModels(); }, []);
 
   useEffect(() => {
     api.get("/attendance/geofence").then(r => setFence(r.data)).catch(() => {});
@@ -168,10 +169,10 @@ export default function Dashboard() {
     }
   };
 
-  const handleFaceCapture = async ({ descriptor, image_b64 }) => {
+  const handleFaceCapture = async ({ descriptors, image_b64, liveness }) => {
     const payload = {
       lat: pendingGeo.lat, lng: pendingGeo.lng, accuracy: pendingGeo.accuracy,
-      descriptor, image_b64,
+      descriptors, image_b64, liveness,
     };
     try {
       if (faceMode === "in") {
@@ -189,7 +190,6 @@ export default function Dashboard() {
       setPendingGeo(null);
       await refresh();
     } catch (e) {
-      toast.error(e?.response?.data?.detail || "Failed");
       throw e;
     }
   };

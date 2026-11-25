@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { preloadFaceModels } from "@/lib/face";
 import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 import { useAuth } from "@/lib/auth";
@@ -11,18 +12,14 @@ export default function FaceEnroll() {
   const navigate = useNavigate();
   const [open, setOpen] = useState(false);
 
-  const handleCapture = async ({ descriptor, image_b64 }) => {
-    try {
-      await api.post("/face/enroll", { descriptor, image_b64 });
-      await checkAuth();
-      toast.success("Face enrolled successfully.");
-      setOpen(false);
-      navigate(user?.role === "admin" ? "/admin" : "/dashboard", { replace: true });
-    } catch (e) {
-      toast.error(e?.response?.data?.detail || "Enrollment failed");
-      throw e;
-    }
+  const handleCapture = async ({ descriptors, image_b64 }) => {
+    await api.post("/face/enroll", { descriptors, image_b64 });
+    await checkAuth();
+    toast.success("Face enrolled successfully.");
+    setOpen(false);
+    navigate(user?.role === "admin" ? "/admin" : "/dashboard", { replace: true });
   };
+  useEffect(() => { preloadFaceModels(); }, []);
 
   return (
     <div className="min-h-screen bg-background grid place-items-center p-6">
@@ -36,11 +33,11 @@ export default function FaceEnroll() {
             </div>
           </div>
           <p className="mt-5 text-sm text-muted-foreground leading-relaxed">
-            Before you can check in, we need a clear reference photo of your face. This is used to verify your identity at every check-in and check-out.
+            Before you can check in, we take 3 quick photos of your face from slightly different angles. They are used to recognise you at every check-in and check-out, and the app keeps learning your face as you use it.
           </p>
           <ul className="mt-6 space-y-2.5 text-sm">
             <li className="flex items-start gap-2"><ShieldCheck size={16} weight="bold" className="text-primary mt-0.5"/> Face data is stored as a math vector (128 numbers) — not searchable as a photo.</li>
-            <li className="flex items-start gap-2"><Camera size={16} weight="bold" className="text-primary mt-0.5"/> Look directly at the camera in good lighting. Remove glasses or masks if possible.</li>
+            <li className="flex items-start gap-2"><Camera size={16} weight="bold" className="text-primary mt-0.5"/> Face a light, take off any helmet, cap or mask. Glasses are fine.</li>
           </ul>
           <button
             onClick={() => setOpen(true)}
@@ -55,8 +52,8 @@ export default function FaceEnroll() {
       <FaceCapture
         open={open}
         title="Enrol your face"
-        subtitle="Center your face in the ring. We'll capture a single reference image."
-        cta="Enrol Face"
+        subtitle="Follow the prompts — the photos are taken automatically."
+        mode="enroll"
         onClose={() => setOpen(false)}
         onCapture={handleCapture}
       />
