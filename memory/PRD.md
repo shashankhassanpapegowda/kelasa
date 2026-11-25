@@ -179,3 +179,12 @@ Employee attendance and route-tracking app, now expanding into a full **employee
 - Holidays have a `branches` list (empty means the whole company). Admins choose whole company or chosen branches. Sub-admins can only add/remove holidays for their managed_sites. Reports, leave day counts and the employee holiday list apply only the holidays that cover the employee's home branch. Renaming a branch updates its holidays; deleting a branch removes it from them.
 - Cron `missed-checkout-digest` runs at 08:00 IST (POST /api/cron/missed-checkout-digest) and sends each admin/sub-admin a daily push listing who in their scope missed check-out yesterday, or "All clear".
 - Tested: iteration_17 (backend 16/16, frontend 100%). Its minor issues are fixed.
+
+## 2026-11 — Face recognition overhaul + 7-day selfie retention
+- Models are self-hosted in /public/models (SSD MobileNet for descriptors, Tiny for live tracking) and the service worker caches them. They preload on My Day, and the camera and models start in parallel.
+- Hands-free capture with a live check: a random blink or head turn (a flat photo can't turn its head). Two descriptor frames are averaged and checked for the same person. Low light is detected and brightened, with a white frame used as a screen light. Users get tips for helmets, masks and glasses.
+- Enrolment takes 3 photos (straight, one side, the other side) into db.face_profiles.templates. A face matching another employee is blocked (409). Re-enrolling needs a manager reset.
+- Matching is the mean of the 2 nearest templates (enrolled + learned). <=0.45 is clean; 0.45–0.55 is accepted but flagged for review; >0.55 is rejected. A face closer to another employee is blocked. Clean matches (<=0.40) are learned (last 10 kept).
+- New admin "Face Checks" tab (#faces) shows the enrolment photo next to the check-in and check-out photos, with flags, review (looks right / not them + note) and filters.
+- Retention: a cron runs at 3am IST to clear check-in/out selfies older than 7 days. Storage has no delete API, so the object is overwritten with an empty file and the path is cleared. Enrolment photos stay until a face reset, which also clears them.
+- Tested: iteration_18 (backend 23/24 → fixed: checkout learning + reviewer/note shown).

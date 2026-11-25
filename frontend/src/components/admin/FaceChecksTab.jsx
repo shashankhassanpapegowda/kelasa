@@ -30,6 +30,11 @@ const Verdict = ({ item, kind, onReview }) => {
       {flagged && !status && <span className="text-[#B07D00] inline-flex items-center gap-1"><Warning size={12} weight="fill"/> {item[`${pre}_face_review_reason`]}</span>}
       {status === "ok" && <span className="text-[#00A152] inline-flex items-center gap-1"><CheckCircle size={12} weight="fill"/> confirmed</span>}
       {status === "mismatch" && <span className="text-[#FF3B30] inline-flex items-center gap-1"><XCircle size={12} weight="fill"/> not the same person</span>}
+      {status && (item[`${pre}_face_reviewed_by`] || item[`${pre}_face_review_note`]) && (
+        <span className="w-full text-muted-foreground" data-testid={`face-review-note-${item.record_id}-${kind}`}>
+          {item[`${pre}_face_reviewed_by`] && `by ${item[`${pre}_face_reviewed_by`]}`}{item[`${pre}_face_review_note`] && ` — “${item[`${pre}_face_review_note`]}”`}
+        </span>
+      )}
       {flagged && !status && (
         <span className="inline-flex gap-1 ml-auto">
           <button onClick={() => onReview(item, kind, "ok")} data-testid={`face-ok-${item.record_id}-${kind}`}
@@ -57,9 +62,10 @@ export default function FaceChecksTab() {
   useEffect(() => { api.get("/admin/employees").then(r => setEmployees(r.data.employees || [])).catch(() => {}); }, []);
 
   const set = (patch) => setF({ ...f, page: 1, ...patch });
-  const review = async (item, kind, decision) => {
-    const note = decision === "mismatch" ? window.prompt(`Note for ${item.name}'s check-${kind} (optional)`) : null;
-    if (note === null && decision === "mismatch") return;
+  const [pending, setPending] = useState(null);
+  const review = async (item, kind, decision, note = null) => {
+    if (decision === "mismatch" && !pending) return setPending({ item, kind, note: "" });
+    setPending(null);
     try {
       await api.post(`/admin/face-checks/${item.record_id}`, { kind, decision, note });
       toast.success(decision === "ok" ? "Marked as correct" : "Marked as not the same person");
@@ -107,6 +113,22 @@ export default function FaceChecksTab() {
         ))}
         {data.items.length === 0 && <div className="col-span-full p-8 text-center text-sm text-muted-foreground">{f.flagged ? "Nothing needs review." : "No face checks in this range."}</div>}
       </div>
+      {pending && (
+        <div className="fixed inset-0 z-50 bg-black/70 grid place-items-center p-4" onClick={() => setPending(null)} data-testid="face-mismatch-dialog">
+          <div className="bg-card border border-border w-full max-w-sm p-4 space-y-3" onClick={e => e.stopPropagation()}>
+            <div className="font-semibold">Not {pending.item.name}?</div>
+            <p className="text-xs text-muted-foreground">This marks the {pending.kind === "in" ? "check-in" : "check-out"} on {pending.item.date} as a different person. It is saved to the activity log.</p>
+            <textarea value={pending.note} onChange={e => setPending({ ...pending, note: e.target.value })} rows={3}
+              placeholder="Note (optional) e.g. colleague checked in for him" data-testid="face-mismatch-note"
+              className="w-full bg-background border border-border px-3 py-2 text-sm"/>
+            <div className="flex gap-2 justify-end">
+              <button onClick={() => setPending(null)} className="px-3 py-2 text-sm border border-border" data-testid="face-mismatch-cancel">Cancel</button>
+              <button onClick={() => review(pending.item, pending.kind, "mismatch", pending.note)} data-testid="face-mismatch-confirm"
+                className="px-3 py-2 text-sm bg-[#FF3B30] text-white">Mark as not them</button>
+            </div>
+          </div>
+        </div>
+      )}
       <div className="p-3 border-t border-border flex items-center justify-between text-xs text-muted-foreground">
         <span>Check-in and check-out selfies are deleted after {data.keep_days} days. Enrolment photos stay until the face is reset.</span>
         <span className="inline-flex items-center gap-2">

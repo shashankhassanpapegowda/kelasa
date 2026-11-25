@@ -1184,7 +1184,9 @@ async def check_out(payload: CheckRequest, user: dict = Depends(get_current_user
         "timestamp": out_dt.isoformat(),
     })
     await resolve_alerts({"record_id": active["record_id"], "resolved_at": None}, out_dt.isoformat(), "checked out")
-    return {"ok": True, "duration_minutes": total_minutes, "net_work_minutes": net_minutes, "over_break": over_break}
+    await learn_face(user["user_id"], check)
+    return {"ok": True, "duration_minutes": total_minutes, "net_work_minutes": net_minutes, "over_break": over_break,
+            "face_distance": check["score"], "face_review": check["flagged"]}
 
 # ---------- Breaks ----------
 @api_router.post("/attendance/break/start")
@@ -1645,6 +1647,9 @@ async def admin_face_checks(user: dict = Depends(require_manager), flagged: bool
     pending = await db.attendance.count_documents({**{k: v for k, v in q.items() if k != "$or"}, "$or": [
         {"check_in_face_review": True, "check_in_face_review_status": None},
         {"check_out_face_review": True, "check_out_face_review_status": None}]})
+    rev_ids = {r.get(k) for r in recs for k in ("check_in_face_reviewed_by", "check_out_face_reviewed_by")} - {None}
+    reviewers = {x["user_id"]: x.get("name") or x.get("email") for x in await db.users.find(
+        {"user_id": {"$in": list(rev_ids)}}, {"_id": 0, "user_id": 1, "name": 1, "email": 1}).to_list(200)}
     items = []
     for r in recs:
         u = users.get(r["user_id"], {})
@@ -1654,7 +1659,10 @@ async def admin_face_checks(user: dict = Depends(require_manager), flagged: bool
             "check_in_face_review_reason", "check_out_face_review_reason", "check_in_face_review_status",
             "check_out_face_review_status", "check_in_liveness", "check_out_liveness", "check_in_low_light",
             "check_out_low_light", "check_in_lat", "check_in_lng", "check_out_lat", "check_out_lng",
-            "check_in_accuracy", "check_out_accuracy", "photos_purged_at")},
+            "check_in_accuracy", "check_out_accuracy", "photos_purged_at", "check_in_face_review_note",
+            "check_out_face_review_note", "check_in_face_reviewed_at", "check_out_face_reviewed_at")},
+            "check_in_face_reviewed_by": reviewers.get(r.get("check_in_face_reviewed_by")),
+            "check_out_face_reviewed_by": reviewers.get(r.get("check_out_face_reviewed_by")),
             "name": u.get("name") or u.get("email"), "site": u.get("site"), "enrollment_photo_path": u.get("face_photo_path")})
     return {"items": items, "total": total, "page": page, "page_size": page_size, "pending_review": pending,
             "keep_days": SELFIE_KEEP_DAYS}

@@ -1,0 +1,38 @@
+{
+  "summary": "Tested the face recognition v2 work from both the backend and the UI. Backend: 24 pytest tests in test_iter18_face_recognition.py using synthesised unit-norm 128-d descriptors at exact distances. 23 pass and 1 fails because check-out never adds a clean match to the learned faces. These all work: 3-photo enrolment and its checks (400/400/403/409 plus face_enroll_blocked), the liveness check, rejecting frames from two different faces, rejecting a non-matching face, the impersonation block (403 + face_blocked), borderline matches flagged and not learned, learned list capped at 10 (check-in path), the migration (also checked by restarting the backend: a legacy user got a face_profiles doc with migrated:true), face reset, the face-checks list (filters, paging, pending_review, keep_days 7, sub-admin scope), review POST (ok/mismatch with note, 403 out of scope, 422 on bad kind, 404), and the selfie purge (401 without the secret; the 8-day-old record is cleared and today's is untouched). Frontend: Face Checks tab works for admin and sub-admin: cards, pending count, needs-review filter, person filter, date filters, 'Looks right' and 'Not them' (using the prompt) update the verdict and clear the pending count, and pagination 1/2 <-> 2/2 works with 26 records. The FaceCapture modal opens from My Day and shows the step instruction and steps. When camera access is blocked it shows face-error with tips and face-retry-btn, and Retry works. All face models load from /models/* with 200 (no github.io). No page errors or missing-export console errors. Ravi's My Day and /admin/reports load.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "POST /api/attendance/checkout", "issue": "check_out() never calls learn_face(), so a clean checkout match (<=0.40) is not added to face_profiles.learned. Only check-in learns. The checkout response also leaves out face_distance and face_review, unlike check-in. Fix: add `await learn_face(user['user_id'], check)` after the update in check_out, and return face_distance/face_review."},
+      {"endpoint": "GET /api/admin/face-checks", "issue": "Items do not include check_*_face_review_note, reviewed_by or reviewed_at, so the admin's note and who reviewed are never shown in the UI."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Admin > Face Checks", "issues": ["'Not them' uses the browser's window.prompt for the note. Cancelling the prompt silently cancels the whole mismatch decision. Use a shadcn Dialog with an optional note field.", "From/To filters are native <input type=date>, not the shadcn Calendar/Popover.", "The review note and reviewer are not shown on the card after a decision."]}
+    ]
+  },
+  "test_report_links": ["/app/backend/tests/test_iter18_face_recognition.py", "/app/test_reports/pytest/iter18_face.xml"],
+  "action_items": [
+    "Call learn_face() in check_out (and return face_distance/face_review in the checkout response)",
+    "Replace window.prompt in FaceChecksTab review with a Dialog; replace native date inputs with shadcn Calendar",
+    "Return and display review note/reviewer in face-checks items"
+  ],
+  "critical_code_review_comments": [
+    "The liveness result is fully decided by the client: the backend only checks liveness.passed == true and that the challenge is 'blink' or 'turn'. Anyone calling the API directly can skip the live check. Mitigation: have the server choose the challenge and issue a short-lived nonce, then check that the per-frame descriptors vary a little (identical frames suggest a photo or replay).",
+    "Enrolment (/face/enroll) has no liveness requirement, so someone could enrol a printed photo.",
+    "closest_other() reads every face_profile on every check-in, check-out and enrolment and computes distances in Python. This is O(N employees x 13 templates) per request and will get slow for large orgs. Consider caching or a vector index.",
+    "The 'mismatch' review decision is only a label. It does not change the attendance status or alert anyone. Consider a follow-up action, such as marking the day for verification.",
+    "Object storage cannot delete, so the purge and face reset overwrite files with empty data. Photos from throwaway or deleted users stay in storage until someone overwrites them.",
+    "server.py is 3464 lines; the face, attendance and cron sections should be split into modules."
+  ],
+  "updated_files": ["/app/backend/tests/test_iter18_face_recognition.py"],
+  "success_rate": {"backend": "96% (23/24)", "frontend": "100%"},
+  "seed_data_creation": "Throwaway field_staff users user_TEST_face_* with sessions, face_profiles and attendance; attendance records att_TEST_* for Ravi (flagged and pagination) and for purge testing; one legacy user user_TEST_migr01. All deleted by id/name afterwards, along with the activity_log rows they created. Known leftover: empty or test JPEGs in object storage (no delete API).",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Run with: cd /app/backend && export REACT_APP_BACKEND_URL=... MONGO_URL=... && pytest tests/test_iter18_face_recognition.py -p no:xdist -p no:randomly (the tests depend on running in order, sharing a module-scoped world fixture). The only expected failure is test_clean_checkout_learns, until check_out calls learn_face. Real faces cannot be produced in headless Chromium: its fake camera stream gets stuck at 'Centre your face in the ring'. To reach the error state, override getUserMedia with add_init_script. The Reports page route is /admin/reports, not /reports.",
+  "rca of the issue": "Checkout learning: check_in() ends with `await learn_face(user['user_id'], check)`, but check_out() calls verify_face() and never calls learn_face. Reproduce by enrolling, checking in with a borderline face (flagged, so not learned), then checking out with a clean match (distance ~0.003): face_profiles.learned stays [] (test_clean_checkout_learns)."
+}

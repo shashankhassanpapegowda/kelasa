@@ -70,13 +70,14 @@ class TestFaceEnrollment:
 
     def test_enroll_invalid_descriptor_length(self, unenrolled_client, base_url, tiny_jpeg_b64):
         r = unenrolled_client.post(f"{base_url}/api/face/enroll",
-                                   json={"descriptor": [0.0] * 64, "image_b64": tiny_jpeg_b64})
+                                   json={"descriptors": [[0.0] * 64] * 3, "image_b64": tiny_jpeg_b64})
         assert r.status_code == 400
 
     def test_enroll_success_and_status_updated(self, unenrolled_client, base_url, tiny_jpeg_b64, mongo_db):
         descriptor = [0.1] * 128
+        descriptors = [descriptor] * 3
         r = unenrolled_client.post(f"{base_url}/api/face/enroll",
-                                   json={"descriptor": descriptor, "image_b64": tiny_jpeg_b64})
+                                   json={"descriptors": descriptors, "image_b64": tiny_jpeg_b64})
         assert r.status_code == 200, r.text
         body = r.json()
         assert body["ok"] is True
@@ -130,7 +131,8 @@ class TestAttendanceFlow:
                                   {"$set": {"face_enrolled": False, "face_descriptor": None}})
         r = unenrolled_client.post(f"{base_url}/api/attendance/checkin", json={
             "lat": 12.97, "lng": 77.59, "accuracy": 20,
-            "descriptor": [0.0] * 128, "image_b64": tiny_jpeg_b64
+            "descriptors": [[0.0] * 128] * 2, "image_b64": tiny_jpeg_b64,
+            "liveness": {"challenge": "blink", "passed": True}
         })
         assert r.status_code == 400
         assert "not enrolled" in r.json()["detail"].lower()
@@ -143,7 +145,8 @@ class TestAttendanceFlow:
         # Check-in with matching descriptor
         r = employee_client.post(f"{base_url}/api/attendance/checkin", json={
             "lat": 12.9716, "lng": 77.5946, "accuracy": 15,
-            "descriptor": enrolled_descriptor, "image_b64": tiny_jpeg_b64
+            "descriptors": [enrolled_descriptor] * 2, "image_b64": tiny_jpeg_b64,
+            "liveness": {"challenge": "blink", "passed": True}
         })
         assert r.status_code == 200, r.text
         body = r.json()
@@ -160,7 +163,8 @@ class TestAttendanceFlow:
         # Double check-in -> 400
         r2 = employee_client.post(f"{base_url}/api/attendance/checkin", json={
             "lat": 12.9716, "lng": 77.5946, "accuracy": 15,
-            "descriptor": enrolled_descriptor, "image_b64": tiny_jpeg_b64
+            "descriptors": [enrolled_descriptor] * 2, "image_b64": tiny_jpeg_b64,
+            "liveness": {"challenge": "blink", "passed": True}
         })
         assert r2.status_code == 400
 
@@ -185,7 +189,8 @@ class TestAttendanceFlow:
         # Check-out with matching descriptor
         rc = employee_client.post(f"{base_url}/api/attendance/checkout", json={
             "lat": 12.9725, "lng": 77.5955, "accuracy": 20,
-            "descriptor": enrolled_descriptor, "image_b64": tiny_jpeg_b64
+            "descriptors": [enrolled_descriptor] * 2, "image_b64": tiny_jpeg_b64,
+            "liveness": {"challenge": "blink", "passed": True}
         })
         assert rc.status_code == 200, rc.text
         cdata = rc.json()
@@ -204,7 +209,8 @@ class TestAttendanceFlow:
         bad = [1.0] * 128
         r = employee_client.post(f"{base_url}/api/attendance/checkin", json={
             "lat": 12.97, "lng": 77.59, "accuracy": 15,
-            "descriptor": bad, "image_b64": tiny_jpeg_b64
+            "descriptors": [bad] * 2, "image_b64": tiny_jpeg_b64,
+            "liveness": {"challenge": "turn", "passed": True}
         })
         assert r.status_code == 403
         assert "match" in r.json()["detail"].lower()
@@ -219,11 +225,13 @@ class TestAdminInspection:
         mongo_db.attendance.delete_many({"user_id": "TEST_user_emp01"})
         employee_client.post(f"{base_url}/api/attendance/checkin", json={
             "lat": 12.9716, "lng": 77.5946, "accuracy": 12,
-            "descriptor": enrolled_descriptor, "image_b64": tiny_jpeg_b64
+            "descriptors": [enrolled_descriptor] * 2, "image_b64": tiny_jpeg_b64,
+            "liveness": {"challenge": "blink", "passed": True}
         })
         employee_client.post(f"{base_url}/api/attendance/checkout", json={
             "lat": 12.9720, "lng": 77.5950, "accuracy": 18,
-            "descriptor": enrolled_descriptor, "image_b64": tiny_jpeg_b64
+            "descriptors": [enrolled_descriptor] * 2, "image_b64": tiny_jpeg_b64,
+            "liveness": {"challenge": "blink", "passed": True}
         })
 
         r = admin_client.get(f"{base_url}/api/admin/attendance")
