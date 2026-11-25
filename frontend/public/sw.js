@@ -1,15 +1,20 @@
 self.addEventListener("install", () => self.skipWaiting());
-self.addEventListener("activate", (event) => event.waitUntil(self.clients.claim()));
+const MODEL_CACHE = "kelasa-face-models-v2";
+self.addEventListener("activate", (event) => event.waitUntil((async () => {
+  for (const k of await caches.keys()) if (k.startsWith("kelasa-face-models-") && k !== MODEL_CACHE) await caches.delete(k);
+  await self.clients.claim();
+})()));
 
 // Face models are large and never change, so serve them cache-first.
 self.addEventListener("fetch", (event) => {
   const url = new URL(event.request.url);
   if (event.request.method !== "GET" || url.origin !== self.location.origin || !url.pathname.startsWith("/models/")) return;
-  event.respondWith(caches.open("kelasa-face-models-v1").then(async (cache) => {
+  event.respondWith(caches.open(MODEL_CACHE).then(async (cache) => {
     const hit = await cache.match(event.request);
     if (hit) return hit;
     const res = await fetch(event.request);
-    if (res.ok) cache.put(event.request, res.clone());
+    // Never cache an HTML fallback page as model data.
+    if (res.ok && !(res.headers.get("content-type") || "").includes("text/html")) cache.put(event.request, res.clone());
     return res;
   }));
 });

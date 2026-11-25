@@ -10,7 +10,11 @@ export function loadFaceModels() {
       faceapi.nets.faceLandmark68Net.loadFromUri(MODEL_URL),
       faceapi.nets.faceRecognitionNet.loadFromUri(MODEL_URL),
       faceapi.nets.ssdMobilenetv1.loadFromUri(MODEL_URL),
-    ]).catch((e) => { loadingPromise = null; throw e; });
+    ]).catch(async (e) => {
+      loadingPromise = null;
+      if (window.caches) for (const k of await caches.keys()) if (k.startsWith("kelasa-face-models-")) await caches.delete(k);
+      throw e;
+    });
   }
   return loadingPromise;
 }

@@ -188,3 +188,8 @@ Employee attendance and route-tracking app, now expanding into a full **employee
 - New admin "Face Checks" tab (#faces) shows the enrolment photo next to the check-in and check-out photos, with flags, review (looks right / not them + note) and filters.
 - Retention: a cron runs at 3am IST to clear check-in/out selfies older than 7 days. Storage has no delete API, so the object is overwritten with an empty file and the path is cleared. Enrolment photos stay until a face reset, which also clears them.
 - Tested: iteration_18 (backend 23/24 → fixed: checkout learning + reviewer/note shown).
+
+## 2026-11 — Fix: face models broken in production (iPhone "tensor should have 4096 values but has 278")
+- Root cause: the production static host returns index.html (8182 bytes, text/html) for files with no extension, so the model shard files arrived as HTML.
+- Fix: renamed the shards to *.bin and updated the manifests. The service worker cache moved to v2 (old caches purged) and never stores text/html. A model-load failure clears the cache and shows a friendly message, and "Try again" re-runs the camera and model load.
+- LEARNING: never ship static assets without a file extension.

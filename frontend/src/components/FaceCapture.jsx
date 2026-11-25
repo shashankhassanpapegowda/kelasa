@@ -124,7 +124,9 @@ export default function FaceCapture({ open, title, subtitle, onClose, onCapture,
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [submit, mode]);
 
+  const [attempt, setAttempt] = useState(0);
   const restart = () => {
+    if (!ready) { setError(null); setAttempt(a => a + 1); return; }
     st.current = freshState();
     setStep(0); setStuck(false); setError(null); setHint("");
     runRef.current = true; tick();
@@ -149,7 +151,10 @@ export default function FaceCapture({ open, title, subtitle, onClose, onCapture,
         st.current.started = Date.now();
         runRef.current = true; tick();
       } catch (e) {
-        setError(e?.name === "NotAllowedError" ? "Camera permission was blocked. Allow camera access in your browser settings." : (e?.message || "Could not start the camera"));
+        const msg = e?.message || "";
+        setError(e?.name === "NotAllowedError" ? "Camera permission was blocked. Allow camera access for this site in Settings."
+          : /tensor|weights|fetch|Failed to load/i.test(msg) ? "The face files didn't download properly. Check your internet, then tap Try again."
+          : (msg || "Could not start the camera"));
       }
     })();
     return () => {
@@ -158,7 +163,7 @@ export default function FaceCapture({ open, title, subtitle, onClose, onCapture,
       streamRef.current = null;
       setReady(false); setStep(0); setStuck(false); setSubmitting(false); setError(null); setFaceOn(false); setLowLight(false);
     };
-  }, [open, tick]);
+  }, [open, tick, attempt]);
 
   if (!open) return null;
   const done = step >= steps.length;
