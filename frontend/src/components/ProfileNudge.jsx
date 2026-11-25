@@ -3,7 +3,7 @@ import { CheckCircle, Circle, Clock, ArrowRight } from "@phosphor-icons/react";
 
 export const profileChecklist = (p) => [
   { key: "bank", label: "Bank account", done: !!p.bank, waiting: !p.bank && !!p.pending_bank },
-  { key: "uan", label: "EPF UAN (optional)", done: !!p.uan, optional: true },
+  { key: "uan", label: p.epf_not_applicable ? "EPF (not applicable)" : "EPF UAN (optional)", done: !!p.uan || !!p.epf_not_applicable, optional: true },
   { key: "esi", label: p.esi_not_applicable ? "ESI (not applicable)" : "ESI number (optional)", done: !!p.esi || !!p.esi_not_applicable, optional: true },
 ];
 

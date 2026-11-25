@@ -62,7 +62,7 @@ export default function ProfilePage() {
           <div className="mt-8 grid lg:grid-cols-2 gap-6 items-start">
             <AvatarSection p={p} onChange={(path) => { setP({ ...p, avatar_path: path }); setUser({ ...user, avatar_path: path }); }}/>
             <DatesSection p={p} onSaved={setP}/>
-            <StatutorySection key={p.esi_not_applicable ? "na" : "esi"} p={p} onSaved={setP}/>
+            <StatutorySection key={`${p.esi_not_applicable ? "na" : "esi"}-${p.epf_not_applicable ? "na" : "epf"}`} p={p} onSaved={setP}/>
             <BankSection p={p} reload={load}/>
             <CameraSelfTest enrolled={!!user?.face_enrolled}/>
           </div>
@@ -155,26 +155,37 @@ function DatesSection({ p, onSaved }) {
   );
 }
 
+function NotApplicable({ field, label, p, onSaved }) {
+  const key = `${field}_not_applicable`;
+  return (
+    <label className="flex items-center gap-2 text-sm cursor-pointer" data-testid={`profile-${field}-na`}>
+      <input type="checkbox" checked={!!p[key]} data-testid={`profile-${field}-na-checkbox`} className="accent-[#0047FF]"
+        onChange={async (e) => {
+          const on = e.target.checked;
+          try { const { data } = await api.put("/profile/me", { [key]: on }); onSaved(data); toast.success(on ? `${label} marked not applicable` : `${label} can be filled again`); }
+          catch (err) { toast.error(err?.response?.data?.detail || "Could not save"); }
+        }}/>
+      {label} is not applicable to me
+    </label>
+  );
+}
+
 function StatutorySection({ p, onSaved }) {
   const s = useSaver(["uan", "esi"], p, onSaved);
   return (
     <Section icon={IdentificationCard} title="EPF & ESI" testid="profile-statutory-section">
       <div className="grid sm:grid-cols-2 gap-3">
-        <Field label="EPF UAN (optional)" hint="12 digits"><input inputMode="numeric" maxLength={14} className={`${inputCls} font-mono`} {...s.bind("uan")} placeholder="12-digit UAN" data-testid="profile-uan"/></Field>
+        <Field label="EPF UAN (optional)" hint={p.epf_not_applicable ? "Marked not applicable" : "12 digits"}>
+          <input inputMode="numeric" maxLength={14} disabled={!!p.epf_not_applicable} className={`${inputCls} font-mono disabled:opacity-40`} {...s.bind("uan")}
+            placeholder={p.epf_not_applicable ? "Not applicable" : "12-digit UAN"} data-testid="profile-uan"/>
+        </Field>
         <Field label="ESI Number (optional)" hint={p.esi_not_applicable ? "Marked not applicable" : "10 or 17 digits"}>
           <input inputMode="numeric" maxLength={19} disabled={!!p.esi_not_applicable} className={`${inputCls} font-mono disabled:opacity-40`} {...s.bind("esi")}
             placeholder={p.esi_not_applicable ? "Not applicable" : "10 or 17 digits"} data-testid="profile-esi"/>
         </Field>
       </div>
-      <label className="flex items-center gap-2 text-sm cursor-pointer" data-testid="profile-esi-na">
-        <input type="checkbox" checked={!!p.esi_not_applicable} data-testid="profile-esi-na-checkbox" className="accent-[#0047FF]"
-          onChange={async (e) => {
-            const on = e.target.checked;
-            try { const { data } = await api.put("/profile/me", { esi_not_applicable: on }); onSaved(data); toast.success(on ? "ESI marked not applicable" : "ESI required again"); }
-            catch (err) { toast.error(err?.response?.data?.detail || "Could not save"); }
-          }}/>
-        ESI is not applicable to me
-      </label>
+      <NotApplicable field="epf" label="EPF" p={p} onSaved={onSaved}/>
+      <NotApplicable field="esi" label="ESI" p={p} onSaved={onSaved}/>
       <p className="text-[11px] text-muted-foreground">Visible only to you, your branch sub-admin and admins.</p>
       <SaveBtn s={s} testid="profile-statutory-save"/>
     </Section>

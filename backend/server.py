@@ -239,6 +239,7 @@ class WishReply(BaseModel):
 
 class ProfileUpdate(BaseModel):
     esi_not_applicable: Optional[bool] = None
+    epf_not_applicable: Optional[bool] = None
     dob: Optional[str] = None
     wedding_anniversary: Optional[str] = None
     date_of_joining: Optional[str] = None
@@ -2895,6 +2896,12 @@ def clean_profile(payload: ProfileUpdate, today_iso: str) -> dict:
             out["esi"] = None
     if out.get("esi"):
         out["esi_not_applicable"] = False
+    if data.get("epf_not_applicable") is not None:
+        out["epf_not_applicable"] = bool(data["epf_not_applicable"])
+        if out["epf_not_applicable"] and not out.get("uan"):
+            out["uan"] = None
+    if out.get("uan"):
+        out["epf_not_applicable"] = False
     return out
 
 def clean_bank(payload: BankDetailsIn) -> dict:
@@ -3443,7 +3450,7 @@ async def payroll_details_csv(request: Request, auth: Optional[str] = Query(None
             x["user_id"], x.get("name", ""), x.get("email", ""), x.get("site") or "", x.get("department") or "",
             p.get("date_of_joining") or "", bank.get("account_holder", ""),
             bank.get("account_number", ""), bank.get("ifsc", ""), bank.get("bank_name") or "",
-            p.get("uan") or "", esi,
+            "Not applicable" if p.get("epf_not_applicable") else (p.get("uan") or ""), esi,
             "Change pending approval" if x["user_id"] in pending else ("Approved" if bank else "Missing"),
         ])
     await log_activity(u, "payroll_export", "Payroll details", f"{len(rows)} employees")

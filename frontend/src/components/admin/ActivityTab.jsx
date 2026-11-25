@@ -41,7 +41,7 @@ const VERB = {
 const FIELD = {
   shift_start: "shift start", shift_end: "shift end", break_max_minutes: "break limit", timezone: "time zone",
   manager_id: "reporting manager", department: "department", site: "branch", email: "email", name: "name",
-  esi_not_applicable: "ESI not applicable", uan: "UAN", esi: "ESI number", dob: "date of birth",
+  esi_not_applicable: "ESI not applicable", epf_not_applicable: "EPF not applicable", uan: "UAN", esi: "ESI number", dob: "date of birth",
   wedding_anniversary: "wedding anniversary", date_of_joining: "joining date", weekly_off: "weekly off",
 };
 const humanAction = (a) => (a || "").replace(/_/g, " ").replace(/^\w/, c => c.toUpperCase());

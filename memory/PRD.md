@@ -196,3 +196,6 @@ Employee attendance and route-tracking app, now expanding into a full **employee
 
 ## 2026-11 — Camera self-test
 - The Profile page has a "Test my camera" card (CameraSelfTest.jsx). It runs the full live face check through POST /api/face/test, a dry run that saves no photo, learns nothing and records no attendance. It returns strong/good/borderline, or the mismatch message. Users who aren't enrolled get a link to /enroll.
+
+## 2026-11 — EPF "not applicable" box
+- Added an `epf_not_applicable` profile flag that mirrors ESI. Ticking it clears and disables the UAN; entering a UAN unticks it. It shows up in the profile nudge, the admin profile modal, the activity log and the payroll-details CSV ("Not applicable").
