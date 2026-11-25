@@ -1012,6 +1012,17 @@ async def migrate_face_profiles():
     if n:
         logger.info(f"Face profiles migrated for {n} users")
 
+class FaceTestIn(BaseModel):
+    descriptors: List[List[float]]
+    liveness: Optional[Liveness] = None
+
+@api_router.post("/face/test")
+async def face_test(payload: FaceTestIn, user: dict = Depends(get_current_user)):
+    """Dry run of the check-in face check: nothing is saved or learned."""
+    check = await verify_face(user, payload)
+    quality = "strong" if check["score"] <= FACE_LEARN else "good" if check["score"] <= FACE_CLEAN else "borderline"
+    return {"ok": True, "quality": quality, "score": check["score"], "flagged": check["flagged"], "low_light": check["low_light"]}
+
 @api_router.post("/face/enroll")
 async def face_enroll(payload: FaceEnrollRequest, user: dict = Depends(get_current_user)):
     if user.get("face_enrolled"):

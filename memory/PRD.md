@@ -193,3 +193,6 @@ Employee attendance and route-tracking app, now expanding into a full **employee
 - Root cause: the production static host returns index.html (8182 bytes, text/html) for files with no extension, so the model shard files arrived as HTML.
 - Fix: renamed the shards to *.bin and updated the manifests. The service worker cache moved to v2 (old caches purged) and never stores text/html. A model-load failure clears the cache and shows a friendly message, and "Try again" re-runs the camera and model load.
 - LEARNING: never ship static assets without a file extension.
+
+## 2026-11 — Camera self-test
+- The Profile page has a "Test my camera" card (CameraSelfTest.jsx). It runs the full live face check through POST /api/face/test, a dry run that saves no photo, learns nothing and records no attendance. It returns strong/good/borderline, or the mismatch message. Users who aren't enrolled get a link to /enroll.

@@ -31,7 +31,7 @@ const Tips = () => (
  * mode "verify": onCapture({ descriptors, image_b64, liveness })
  * mode "enroll": onCapture({ descriptors[3], image_b64 })
  */
-export default function FaceCapture({ open, title, subtitle, onClose, onCapture, mode = "verify" }) {
+export default function FaceCapture({ open, title, subtitle, onClose, onCapture, mode = "verify", note }) {
   const videoRef = useRef(null);
   const streamRef = useRef(null);
   const runRef = useRef(false);
@@ -148,6 +148,7 @@ export default function FaceCapture({ open, title, subtitle, onClose, onCapture,
         streamRef.current = stream;
         if (videoRef.current) { videoRef.current.srcObject = stream; await videoRef.current.play().catch(() => {}); }
         setReady(true);
+        setHint("");
         st.current.started = Date.now();
         runRef.current = true; tick();
       } catch (e) {
@@ -217,9 +218,9 @@ export default function FaceCapture({ open, title, subtitle, onClose, onCapture,
             </div>
           )}
           <p className="mt-3 text-[11px] text-muted-foreground">
-            {mode === "enroll"
+            {note || (mode === "enroll"
               ? "We take 3 quick photos from slightly different angles so you're recognised reliably."
-              : "A quick live check stops anyone using a photo. Your selfie is kept for 7 days as proof, then deleted."}
+              : "A quick live check stops anyone using a photo. Your selfie is kept for 7 days as proof, then deleted.")}
           </p>
         </div>
       </div>
