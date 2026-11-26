@@ -6,7 +6,6 @@ import AppHeader from "@/components/AppHeader";
 import AuthPhoto from "@/components/AuthPhoto";
 import ProfileNudge from "@/components/ProfileNudge";
 import CelebrationBanner from "@/components/CelebrationBanner";
-import { CameraSelfTest } from "@/components/CameraSelfTest";
 import { Camera, Trash, Bank, IdentificationCard, CalendarHeart, Clock, CheckCircle, XCircle } from "@phosphor-icons/react";
 
 const inputCls = "w-full bg-background border border-border px-3 py-2 text-sm";
@@ -64,7 +63,6 @@ export default function ProfilePage() {
             <DatesSection p={p} onSaved={setP}/>
             <StatutorySection key={`${p.esi_not_applicable ? "na" : "esi"}-${p.epf_not_applicable ? "na" : "epf"}`} p={p} onSaved={setP}/>
             <BankSection p={p} reload={load}/>
-            <CameraSelfTest enrolled={!!user?.face_enrolled}/>
           </div>
         )}
       </main>

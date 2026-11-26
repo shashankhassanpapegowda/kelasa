@@ -4,14 +4,12 @@ import CelebrationsCard from "@/components/CelebrationsCard";
 import ProfileNudge from "@/components/ProfileNudge";
 import CelebrationBanner from "@/components/CelebrationBanner";
 import MapView from "@/components/MapView";
-import FaceCapture from "@/components/FaceCapture";
+import SelfieCapture from "@/components/SelfieCapture";
 import AuthPhoto from "@/components/AuthPhoto";
 import { api } from "@/lib/api";
 import { toast } from "sonner";
 import { useAuth } from "@/lib/auth";
-import { useNavigate } from "react-router-dom";
 import { getAccuratePosition, startLiveWatch } from "@/lib/geo";
-import { preloadFaceModels } from "@/lib/face";
 import { Camera, Clock, Path as PathIcon, MapPin, ArrowsClockwise, GpsFix, WarningCircle, Coffee, ArrowCounterClockwise, Megaphone, PushPin } from "@phosphor-icons/react";
 
 const PING_INTERVAL_MS = 30_000;
@@ -55,7 +53,6 @@ const accClass = (m) => {
 
 export default function Dashboard() {
   const { user } = useAuth();
-  const navigate = useNavigate();
   const [active, setActive] = useState(null);
   const [todayRecords, setTodayRecords] = useState([]);
   const [pings, setPings] = useState([]);
@@ -75,9 +72,6 @@ export default function Dashboard() {
   const liveStopRef = useRef(null);
   const lastPingAtRef = useRef(0);
 
-  useEffect(() => {
-    if (user && !user.face_enrolled) navigate("/enroll", { replace: true });
-  }, [user, navigate]);
 
   const refresh = async () => {
     const [t, l, h] = await Promise.all([
@@ -91,7 +85,7 @@ export default function Dashboard() {
     setHistory(h.data.records || []);
   };
 
-  useEffect(() => { refresh(); preloadFaceModels(); }, []);
+  useEffect(() => { refresh(); }, []);
 
   useEffect(() => {
     api.get("/attendance/geofence").then(r => setFence(r.data)).catch(() => {});
@@ -169,11 +163,8 @@ export default function Dashboard() {
     }
   };
 
-  const handleFaceCapture = async ({ descriptors, image_b64, liveness }) => {
-    const payload = {
-      lat: pendingGeo.lat, lng: pendingGeo.lng, accuracy: pendingGeo.accuracy,
-      descriptors, image_b64, liveness,
-    };
+  const handleFaceCapture = async ({ image_b64 }) => {
+    const payload = { lat: pendingGeo.lat, lng: pendingGeo.lng, accuracy: pendingGeo.accuracy, image_b64 };
     try {
       if (faceMode === "in") {
         const res = await api.post("/attendance/checkin", payload);
@@ -405,10 +396,10 @@ export default function Dashboard() {
         </div>
       </main>
 
-      <FaceCapture
+      <SelfieCapture
         open={faceOpen}
-        title={faceMode === "in" ? "Face Check-In" : "Face Check-Out"}
-        subtitle={faceMode === "in" ? "Verify your identity to start your duty session." : "Verify your identity to end your duty session."}
+        title={faceMode === "in" ? "Check-In Selfie" : "Check-Out Selfie"}
+        subtitle={faceMode === "in" ? "Take a quick selfie to start your duty session." : "Take a quick selfie to end your duty session."}
         cta={faceMode === "in" ? "Check In" : "Check Out"}
         onClose={() => { setFaceOpen(false); setPendingGeo(null); }}
         onCapture={handleFaceCapture}

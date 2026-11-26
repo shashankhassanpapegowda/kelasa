@@ -33,6 +33,7 @@ const VERB = {
   holiday_removed: "Removed holiday {t}",
   announcement_posted: "Posted notice \"{t}\"",
   announcement_removed: "Removed notice \"{t}\"",
+  regularization_requested: "{t} requested an attendance correction",
   regularization_approved: "Approved attendance correction for {t}",
   regularization_rejected: "Rejected attendance correction for {t}",
   employees_imported: "Imported employees from a file",

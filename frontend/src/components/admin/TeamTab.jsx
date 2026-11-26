@@ -107,7 +107,6 @@ export default function TeamTab({ isAdmin, currentUserId }) {
                   {emp.pending_invite && <Tag className="bg-secondary text-foreground">INVITE PENDING</Tag>}
                   {!emp.has_password && <Tag className="bg-[#FF3B30]/15 text-[#FF3B30]">NO PASSWORD</Tag>}
                   {emp.must_change_password && emp.has_password && <Tag className="bg-yellow-400 text-black">TEMP PASSWORD</Tag>}
-                  {!emp.face_enrolled && <Tag className="bg-yellow-500/20 text-yellow-700">NOT ENROLLED</Tag>}
                 </div>
                 <div className="text-xs text-muted-foreground truncate">{emp.email}</div>
                 <div className="text-[10px] font-mono text-muted-foreground mt-1 flex items-center gap-1.5 flex-wrap">
@@ -144,12 +143,6 @@ export default function TeamTab({ isAdmin, currentUserId }) {
                       title="24/7 = location is tracked all the time. Duty only = tracked only between check-in and check-out."
                       className="text-[10px] label-overline hover:text-primary" data-testid={`toggle-tracking-${emp.user_id}`}>
                       {emp.tracking_mode === "always_on" ? "→ DUTY ONLY" : "→ 24/7"}
-                    </button>
-                  )}
-                  {emp.face_enrolled && (isAdmin || emp.user_id !== currentUserId) && (
-                    <button onClick={() => { if (window.confirm(`Reset face enrollment for ${emp.name}?`)) act(() => api.delete(`/admin/employees/${emp.user_id}/face`), "Face enrollment reset"); }}
-                      className="text-[10px] label-overline hover:text-[#FF3B30]" data-testid={`reset-face-${emp.user_id}`}>
-                      RESET FACE
                     </button>
                   )}
                   {emp.user_id !== currentUserId && (

@@ -30,7 +30,7 @@ from zoneinfo import ZoneInfo
 import json
 import asyncio
 from pywebpush import webpush, WebPushException
-from attendance_calc import compute_session, session_cap, day_status, DEFAULT_WEEKLY_OFF
+from attendance_calc import shift_minutes, compute_session, session_cap, day_status, DEFAULT_WEEKLY_OFF
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
@@ -124,9 +124,19 @@ class CheckRequest(BaseModel):
     lat: float
     lng: float
     accuracy: Optional[float] = None
-    descriptors: List[List[float]]
     image_b64: str
+    descriptors: Optional[List[List[float]]] = None
     liveness: Optional[Liveness] = None
+
+class RegularizationIn(BaseModel):
+    date: str
+    check_in: str
+    check_out: str
+    reason: str
+
+class RegularizationDecision(BaseModel):
+    decision: Literal["approved", "rejected"]
+    note: Optional[str] = None
 
 class FaceReviewIn(BaseModel):
     kind: Literal["in", "out"]
@@ -1086,9 +1096,14 @@ async def download_file(path: str, request: Request, auth: Optional[str] = Query
     return Response(content=data, media_type=content_type)
 
 # ---------- Attendance ----------
+def require_selfie(image_b64: str):
+    raw = (image_b64 or "").split(",", 1)[-1]
+    if len(raw) < 200:
+        raise HTTPException(status_code=400, detail="Please take a selfie to check in or out.")
+
 @api_router.post("/attendance/checkin")
 async def check_in(payload: CheckRequest, user: dict = Depends(get_current_user)):
-    check = await verify_face(user, payload)
+    require_selfie(payload.image_b64)
 
     active = await db.attendance.find_one(
         {"user_id": user["user_id"], "check_out": None}, {"_id": 0},
@@ -1112,7 +1127,6 @@ async def check_in(payload: CheckRequest, user: dict = Depends(get_current_user)
         "check_in_lng": payload.lng,
         "check_in_accuracy": payload.accuracy,
         "check_in_photo_path": photo_path,
-        **face_fields("check_in", check),
         "check_in_branch": branch,
         "check_out": None,
         "status": "on_duty",
@@ -1132,12 +1146,11 @@ async def check_in(payload: CheckRequest, user: dict = Depends(get_current_user)
         "accuracy": payload.accuracy,
         "timestamp": check_in_iso,
     })
-    await learn_face(user["user_id"], check)
-    return {"ok": True, "record_id": record_id, "face_distance": check["score"], "face_review": check["flagged"], "late_by_minutes": late_by}
+    return {"ok": True, "record_id": record_id, "late_by_minutes": late_by}
 
 @api_router.post("/attendance/checkout")
 async def check_out(payload: CheckRequest, user: dict = Depends(get_current_user)):
-    check = await verify_face(user, payload)
+    require_selfie(payload.image_b64)
 
     active = await db.attendance.find_one(
         {"user_id": user["user_id"], "check_out": None}, {"_id": 0},
@@ -1173,7 +1186,6 @@ async def check_out(payload: CheckRequest, user: dict = Depends(get_current_user
             "check_out_lng": payload.lng,
             "check_out_accuracy": payload.accuracy,
             "check_out_photo_path": photo_path,
-            **face_fields("check_out", check),
             "check_out_branch": branch,
             "status": "off_duty",
             "duration_minutes": total_minutes,
@@ -1196,9 +1208,7 @@ async def check_out(payload: CheckRequest, user: dict = Depends(get_current_user
         "timestamp": out_dt.isoformat(),
     })
     await resolve_alerts({"record_id": active["record_id"], "resolved_at": None}, out_dt.isoformat(), "checked out")
-    await learn_face(user["user_id"], check)
-    return {"ok": True, "duration_minutes": total_minutes, "net_work_minutes": net_minutes, "over_break": over_break,
-            "face_distance": check["score"], "face_review": check["flagged"]}
+    return {"ok": True, "duration_minutes": total_minutes, "net_work_minutes": net_minutes, "over_break": over_break}
 
 # ---------- Breaks ----------
 @api_router.post("/attendance/break/start")
@@ -2815,6 +2825,12 @@ async def admin_branch_report(
     return {"from": from_date, "to": to_date, "punches": log, "zone_alerts": alerts}
 
 async def manager_from_request(request: Request, auth: Optional[str]) -> dict:
+    u = await user_from_request(request, auth)
+    if u.get("role") not in ("admin", "sub_admin"):
+        raise HTTPException(status_code=403, detail="Admin only")
+    return u
+
+async def user_from_request(request: Request, auth: Optional[str]) -> dict:
     token = request.cookies.get("session_token") or auth
     if not token:
         auth_header = request.headers.get("Authorization", "")
@@ -2826,8 +2842,8 @@ async def manager_from_request(request: Request, auth: Optional[str]) -> dict:
     if not session:
         raise HTTPException(status_code=401, detail="Invalid session")
     u = await db.users.find_one({"user_id": session["user_id"]}, {"_id": 0})
-    if not u or u.get("role") not in ("admin", "sub_admin"):
-        raise HTTPException(status_code=403, detail="Admin only")
+    if not u:
+        raise HTTPException(status_code=401, detail="Invalid session")
     return u
 
 def csv_response(header: List[str], rows: List[list], filename: str) -> StreamingResponse:
@@ -3384,6 +3400,192 @@ async def cron_missed_checkout_digest(request: Request):
         return {"ok": True, "duplicate": True}
     _track(asyncio.create_task(run_missed_checkout_digest(day_key)))
     return {"ok": True, "queued": day_key}
+
+# ---------- Employee calendar ----------
+def _month_bounds(month: str):
+    y, m = map(int, month.split("-"))
+    if not 1 <= m <= 12:
+        raise HTTPException(status_code=400, detail="Invalid month")
+    first = ddate(y, m, 1)
+    return first, ddate(y + (m == 12), m % 12 + 1, 1) - timedelta(days=1)
+
+SESSION_KEYS = ("record_id", "check_in", "check_out", "net_work_minutes", "duration_minutes", "total_break_minutes",
+                "breaks", "late_by_minutes", "auto_closed", "auto_close_reason", "over_cap", "over_break", "regularized",
+                "check_in_branch", "check_out_branch", "status")
+
+async def build_calendar(u: dict, month: str) -> dict:
+    await auto_close_stale_sessions()
+    first, last = _month_bounds(month)
+    f, t = first.isoformat(), last.isoformat()
+    uid = u["user_id"]
+    recs = await db.attendance.find({"user_id": uid, "date": {"$gte": f, "$lte": t}}, {"_id": 0}).sort("check_in", 1).to_list(2000)
+    by_date: dict = {}
+    for r in recs:
+        by_date.setdefault(r["date"], []).append({k: r.get(k) for k in SESSION_KEYS})
+    hols = {h["date"]: h["name"] for h in await db.holidays.find(
+        {"date": {"$gte": f, "$lte": t}, **holiday_scope(u.get("site"))}, {"_id": 0, "date": 1, "name": 1}).to_list(200)}
+    leave_by_date: dict = {}
+    for lv in await db.leave_requests.find({"user_id": uid, "status": "approved", "start_date": {"$lte": t}, "end_date": {"$gte": f}}, {"_id": 0}).to_list(500):
+        cur = max(ddate.fromisoformat(lv["start_date"]), first)
+        while cur <= min(ddate.fromisoformat(lv["end_date"]), last):
+            leave_by_date[cur.isoformat()] = lv
+            cur += timedelta(days=1)
+    regs = {r["date"]: r for r in await db.regularizations.find(
+        {"user_id": uid, "date": {"$gte": f, "$lte": t}}, {"_id": 0}).sort("created_at", 1).to_list(500)}
+    prof = await db.employee_profiles.find_one({"user_id": uid}, {"_id": 0, "date_of_joining": 1}) or {}
+    jd = prof.get("date_of_joining") or (u.get("created_at") or "")[:10] or None
+    has_shift = bool(u.get("shift_start"))
+    half = (shift_minutes(u.get("shift_start"), u.get("shift_end")) or 0) / 2
+    today_d = local_today_date(u)
+    days, counts = [], {}
+    cur = first
+    while cur <= last:
+        d = cur.isoformat()
+        sess = by_date.get(d, [])
+        lv = leave_by_date.get(d)
+        net = sum((x.get("net_work_minutes") or 0) for x in sess)
+        open_now = any(not x.get("check_out") for x in sess)
+        status = day_status(cur, today=today_d, present=bool(sess),
+                            late=has_shift and any((x.get("late_by_minutes") or 0) > 0 for x in sess),
+                            on_leave=bool(lv), holiday=d in hols, weekly_off=u.get("weekly_off", DEFAULT_WEEKLY_OFF),
+                            has_shift=has_shift, joined=ddate.fromisoformat(jd) if jd else None,
+                            pending_invite=bool(u.get("pending_invite")))
+        if sess and any((x.get("auto_closed") and not x.get("regularized")) or x.get("over_cap") for x in sess):
+            status = "punch_error"
+        elif sess and not open_now and half and net < half:
+            status = "half_day"
+        elif lv and lv.get("half_day"):
+            status = "half_day"
+        elif cur == today_d and not sess and status == "absent":
+            status = "today"
+        counts[status] = counts.get(status, 0) + 1
+        days.append({"date": d, "status": status, "sessions": sess, "net_work_minutes": net,
+                     "holiday": hols.get(d), "leave": {"leave_type": lv.get("leave_type"), "half_day": lv.get("half_day")} if lv else None,
+                     "regularization": regs.get(d)})
+        cur += timedelta(days=1)
+    return {"month": month, "today": today_d.isoformat(), "days": days, "counts": counts,
+            "total_work_minutes": sum(x["net_work_minutes"] for x in days),
+            "shift": {"start": u.get("shift_start"), "end": u.get("shift_end")}}
+
+@api_router.get("/me/calendar")
+async def my_calendar(month: str = Query(..., pattern=r"^\d{4}-\d{2}$"), user: dict = Depends(get_current_user)):
+    return await build_calendar(user, month)
+
+@api_router.get("/me/calendar.csv")
+async def my_calendar_csv(request: Request, month: str = Query(..., pattern=r"^\d{4}-\d{2}$"), auth: Optional[str] = Query(None)):
+    user = await user_from_request(request, auth)
+    cal = await build_calendar(user, month)
+    tz = ZoneInfo(user.get("timezone") or DEFAULT_TZ)
+    fmt = lambda iso: parse_iso(iso).astimezone(tz).strftime("%H:%M") if iso else ""
+    rows = [[d["date"], d["status"].replace("_", " ").title(),
+             " | ".join(f"{fmt(x['check_in'])}-{fmt(x['check_out'])}" for x in d["sessions"]),
+             _hm(d["net_work_minutes"]), sum((x.get("total_break_minutes") or 0) for x in d["sessions"]),
+             d["holiday"] or (d["leave"] or {}).get("leave_type") or ""] for d in cal["days"]]
+    return csv_response(["Date", "Status", "Sessions", "Work (h:mm)", "Break (min)", "Holiday / Leave"], rows, f"my_attendance_{month}.csv")
+
+# ---------- Attendance correction (regularization) ----------
+def _local_iso(day: str, hhmm: str, tz_name: str) -> str:
+    t = parse_hhmm(hhmm)
+    if not t:
+        raise HTTPException(status_code=400, detail="Use HH:MM times")
+    return datetime.combine(ddate.fromisoformat(day), t, ZoneInfo(tz_name)).astimezone(timezone.utc).isoformat()
+
+async def _reg_with_names(items: List[dict]) -> List[dict]:
+    ids = {i["user_id"] for i in items} | {i.get("decided_by") for i in items if i.get("decided_by")}
+    names = {u["user_id"]: u.get("name") or u.get("email") for u in await db.users.find(
+        {"user_id": {"$in": list(ids)}}, {"_id": 0, "user_id": 1, "name": 1, "email": 1}).to_list(1000)}
+    return [{**i, "name": names.get(i["user_id"]), "decided_by_name": names.get(i.get("decided_by"))} for i in items]
+
+@api_router.post("/regularizations")
+async def create_regularization(payload: RegularizationIn, user: dict = Depends(get_current_user)):
+    try:
+        day = ddate.fromisoformat(payload.date)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid date") from None
+    if day > local_today_date(user):
+        raise HTTPException(status_code=400, detail="You can't correct a future day")
+    tz = user.get("timezone") or DEFAULT_TZ
+    cin, cout = _local_iso(payload.date, payload.check_in, tz), _local_iso(payload.date, payload.check_out, tz)
+    if cout <= cin:
+        raise HTTPException(status_code=400, detail="Check-out must be after check-in on the same day")
+    if parse_iso(cout) > now_utc():
+        raise HTTPException(status_code=400, detail="Check-out time can't be in the future")
+    if len(payload.reason.strip()) < 5:
+        raise HTTPException(status_code=400, detail="Please explain the reason (at least a few words)")
+    if await db.regularizations.find_one({"user_id": user["user_id"], "date": payload.date, "status": "pending"}):
+        raise HTTPException(status_code=400, detail="You already have a pending correction for this day")
+    doc = {"request_id": f"reg_{uuid.uuid4().hex[:10]}", "user_id": user["user_id"], "date": payload.date,
+           "check_in": payload.check_in, "check_out": payload.check_out, "reason": payload.reason.strip(),
+           "status": "pending", "created_at": now_utc().isoformat()}
+    await db.regularizations.insert_one(doc)
+    await log_activity(user, "regularization_requested", user.get("name") or user["user_id"],
+                       f"{payload.date} {payload.check_in}-{payload.check_out}")
+    doc.pop("_id", None)
+    return {"ok": True, "request": doc}
+
+@api_router.get("/regularizations/mine")
+async def my_regularizations(user: dict = Depends(get_current_user)):
+    items = await db.regularizations.find({"user_id": user["user_id"]}, {"_id": 0}).sort("created_at", -1).to_list(100)
+    return {"items": await _reg_with_names(items)}
+
+@api_router.post("/regularizations/{request_id}/cancel")
+async def cancel_regularization(request_id: str, user: dict = Depends(get_current_user)):
+    res = await db.regularizations.update_one({"request_id": request_id, "user_id": user["user_id"], "status": "pending"},
+                                              {"$set": {"status": "cancelled", "decided_at": now_utc().isoformat()}})
+    if not res.modified_count:
+        raise HTTPException(status_code=404, detail="No pending request to cancel")
+    return {"ok": True}
+
+@api_router.get("/admin/regularizations")
+async def admin_regularizations(status: Optional[str] = "pending", user: dict = Depends(require_manager)):
+    q = {**user_filter(await scoped_user_ids(user))}
+    if status and status != "all":
+        q["status"] = status
+    items = await db.regularizations.find(q, {"_id": 0}).sort("created_at", -1).to_list(500)
+    return {"items": await _reg_with_names(items)}
+
+async def apply_regularization(reg: dict, emp: dict):
+    tz = emp.get("timezone") or DEFAULT_TZ
+    cin, cout = _local_iso(reg["date"], reg["check_in"], tz), _local_iso(reg["date"], reg["check_out"], tz)
+    rec = await db.attendance.find_one({"user_id": emp["user_id"], "date": reg["date"]}, {"_id": 0}, sort=[("check_in", 1)])
+    breaks = int((rec or {}).get("total_break_minutes") or 0)
+    calc = compute_session(cin, cout, breaks, emp.get("shift_start"), emp.get("shift_end"))
+    fields = {"check_in": cin, "check_out": cout, "status": "off_duty", "on_break": False, "auto_closed": False,
+              "auto_close_reason": None, "regularized": True, "regularization_id": reg["request_id"],
+              "late_by_minutes": compute_late_minutes(cin, emp),
+              "over_break": breaks > int(emp.get("break_max_minutes") if emp.get("break_max_minutes") is not None else 60), **calc}
+    if rec:
+        keep = {} if rec.get("regularized") else {"original_check_in": rec.get("check_in"), "original_check_out": rec.get("check_out")}
+        await db.attendance.update_one({"record_id": rec["record_id"]}, {"$set": {**fields, **keep}})
+        await resolve_alerts({"record_id": rec["record_id"], "resolved_at": None}, cout, "regularized")
+    else:
+        await db.attendance.insert_one({"record_id": f"att_{uuid.uuid4().hex[:12]}", "user_id": emp["user_id"], "date": reg["date"],
+                                        "breaks": [], "total_break_minutes": 0, "check_in_branch": None, **fields})
+
+@api_router.post("/admin/regularizations/{request_id}/decide")
+async def decide_regularization(request_id: str, payload: RegularizationDecision, user: dict = Depends(require_manager)):
+    reg = await db.regularizations.find_one({"request_id": request_id}, {"_id": 0})
+    if not reg:
+        raise HTTPException(status_code=404, detail="Not found")
+    await ensure_manages_other(user, reg["user_id"])
+    note = (payload.note or "").strip()
+    if payload.decision == "rejected" and not note:
+        raise HTTPException(status_code=400, detail="Add a note explaining why it was rejected")
+    res = await db.regularizations.update_one({"request_id": request_id, "status": "pending"}, {"$set": {
+        "status": payload.decision, "manager_note": note or None, "decided_by": user["user_id"], "decided_at": now_utc().isoformat()}})
+    if not res.modified_count:
+        raise HTTPException(status_code=400, detail="This request was already decided")
+    emp = await db.users.find_one({"user_id": reg["user_id"]}, {"_id": 0, "password_hash": 0, "face_descriptor": 0})
+    if payload.decision == "approved":
+        await apply_regularization(reg, emp)
+    await log_activity(user, f"regularization_{payload.decision}", emp.get("name") or reg["user_id"],
+                       f"{reg['date']} {reg['check_in']}-{reg['check_out']}" + (f" · {note}" if note else ""))
+    nice = ddate.fromisoformat(reg["date"]).strftime("%d %b")
+    _track(asyncio.create_task(push_to_user(reg["user_id"], {
+        "title": f"Correction {payload.decision} for {nice}",
+        "body": note or (f"Your times {reg['check_in']}–{reg['check_out']} were applied." if payload.decision == "approved" else ""),
+        "tag": f"reg_{request_id}", "url": "/calendar"})))
+    return {"ok": True}
 
 # ---------- Monthly payroll summary ----------
 def _hm(m: int) -> str:
