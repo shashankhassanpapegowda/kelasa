@@ -30,6 +30,8 @@ from zoneinfo import ZoneInfo
 import json
 import asyncio
 from pywebpush import webpush, WebPushException
+import export_job
+from fastapi.responses import FileResponse
 from attendance_calc import shift_minutes, compute_session, session_cap, day_status, DEFAULT_WEEKLY_OFF
 
 ROOT_DIR = Path(__file__).parent
@@ -1574,6 +1576,7 @@ async def cron_selfie_purge(request: Request):
     if envelope is not None and not isinstance(envelope, dict):
         raise HTTPException(status_code=400, detail="Invalid body")
     _track(asyncio.create_task(run_selfie_purge()))
+    export_job.cleanup_stale()
     return {"ok": True, "queued": True}
 
 # ---------- Organisation ----------
@@ -3439,6 +3442,40 @@ async def decide_regularization(request_id: str, payload: RegularizationDecision
         "body": note or (f"Your times {reg['check_in']}–{reg['check_out']} were applied." if payload.decision == "approved" else ""),
         "tag": f"reg_{request_id}", "url": "/calendar"})))
     return {"ok": True}
+
+# ---------- Full data export (admin only) ----------
+def _export_view(job: dict) -> dict:
+    return {k: job.get(k) for k in ("job_id", "status", "progress", "size_bytes", "error", "stage", "started_at",
+                                    "finished_at", "manifest_summary")}
+
+@api_router.post("/admin/export/start")
+async def export_start(user: dict = Depends(require_admin)):
+    try:
+        job = export_job.start_export(os.environ["MONGO_URL"], os.environ["DB_NAME"], f"{APP_NAME}/", get_object, user.get("email"))
+    except RuntimeError as e:
+        raise HTTPException(status_code=409, detail=str(e)) from None
+    await log_activity(user, "data_export", user.get("email") or user["user_id"], f"Full data export started at {job['started_at']}")
+    return {"job_id": job["job_id"]}
+
+@api_router.get("/admin/export/current")
+async def export_current(user: dict = Depends(require_admin)):
+    job = export_job.active_job()
+    return {"job": _export_view(job) if job else None}
+
+@api_router.get("/admin/export/status/{job_id}")
+async def export_status(job_id: str, user: dict = Depends(require_admin)):
+    job = export_job.get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Export not found")
+    return _export_view(job)
+
+@api_router.get("/admin/export/download/{job_id}")
+async def export_download(job_id: str, user: dict = Depends(require_admin)):
+    job = export_job.get_job(job_id)
+    if not job or job["status"] != "done" or not os.path.exists(job["file"]):
+        raise HTTPException(status_code=404, detail="Export file not available")
+    stamp = parse_iso(job["started_at"]).astimezone(ZoneInfo(DEFAULT_TZ)).strftime("%Y-%m-%d-%H%M")
+    return FileResponse(job["file"], media_type="application/zip", filename=f"kelasa-export-{stamp}.zip")
 
 # ---------- Monthly payroll summary ----------
 def _hm(m: int) -> str:
