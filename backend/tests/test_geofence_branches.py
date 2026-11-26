@@ -13,6 +13,11 @@ EMP_PW = "RaviReset@26"
 EMP_ID = "user_testemp01"
 ANITA = "user_testemp02"
 GEO_SITE = "site_ba19694f88"
+_PAYROLL = {
+    "uan": "100200300401", "esi": "1234567890",
+    "account_holder": "Test Employee", "account_number": "123456789012",
+    "ifsc": "SBIN0001234", "bank_name": "State Bank of India",
+}
 GEO_LAT, GEO_LNG, GEO_R = 12.9716, 77.5946, 200
 DESC = [0.01] * 128
 M_PER_DEG = 111194.93
@@ -223,7 +228,7 @@ class TestEmployeeEmailEdit:
     def test_change_email_and_login(self, admin, mongo_db):
         email = f"test_{uuid.uuid4().hex[:6]}@gtgroups.local"
         r = admin.post(f"{BASE_URL}/api/admin/employees",
-                       json={"name": "TEST Mailer", "email": email, "password": "TestPass@123"})
+                       json={"name": "TEST Mailer", "email": email, "password": "TestPass@123", **_PAYROLL})
         assert r.status_code == 200, r.text
         uid = r.json()["employee"]["user_id"]
         try:

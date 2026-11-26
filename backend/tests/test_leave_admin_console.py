@@ -14,6 +14,12 @@ EMP = "test_session_emp_001"
 def h(tok):
     return {"Authorization": f"Bearer {tok}", "Content-Type": "application/json"}
 
+_PAYROLL = {
+    "uan": "100200300401", "esi": "1234567890",
+    "account_holder": "Test Employee", "account_number": "123456789012",
+    "ifsc": "SBIN0001234", "bank_name": "State Bank of India",
+}
+
 
 def types_by_code(tok=EMP):
     r = requests.get(f"{API}/leave/types", headers=h(tok))
@@ -182,7 +188,7 @@ class TestSubAdminScope:
 
     def test_sub_admin_add_remove_employee(self):
         email = f"test_sub_{uuid.uuid4().hex[:6]}@example.com"
-        r = requests.post(f"{API}/admin/employees", headers=h(SUB), json={"name": "TEST_SubHire", "email": email, "role": "admin"})
+        r = requests.post(f"{API}/admin/employees", headers=h(SUB), json={"name": "TEST_SubHire", "email": email, "role": "admin", **_PAYROLL})
         assert r.status_code == 200
         emp = r.json()["employee"]
         assert emp["role"] == "employee" and emp["manager_id"] == "user_testsub01"
@@ -201,10 +207,10 @@ class TestAdminManagement:
         email = f"test_emp_{uuid.uuid4().hex[:6]}@example.com"
         r = requests.post(f"{API}/admin/employees", headers=h(ADMIN), json={
             "name": "TEST_NewHire", "email": email, "department": "Field Operations", "site": "Bengaluru HQ",
-            "shift_start": "09:00", "shift_end": "18:00"})
+            "shift_start": "09:00", "shift_end": "18:00", **_PAYROLL})
         assert r.status_code == 200, r.text
         uid = r.json()["employee"]["user_id"]
-        dup = requests.post(f"{API}/admin/employees", headers=h(ADMIN), json={"name": "x", "email": email})
+        dup = requests.post(f"{API}/admin/employees", headers=h(ADMIN), json={"name": "x", "email": email, **_PAYROLL})
         assert dup.status_code == 400
         a = requests.patch(f"{API}/admin/employees/{uid}/assignment", headers=h(ADMIN), json={
             "designation": "TEST_Driver", "department": "Administration", "manager_id": "user_testsub01"})

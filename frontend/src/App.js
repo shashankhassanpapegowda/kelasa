@@ -12,6 +12,7 @@ import ProfilePage from "@/pages/ProfilePage";
 import WishesPage from "@/pages/WishesPage";
 import ChangePassword from "@/pages/ChangePassword";
 import ResetPassword from "@/pages/ResetPassword";
+import SalaryPage from "@/pages/SalaryPage";
 
 const isManager = (user) => user?.role === "admin" || user?.role === "sub_admin";
 
@@ -43,6 +44,13 @@ function RootRedirect() {
   return <Login/>;
 }
 
+function SalaryGate() {
+  const { user } = useAuth();
+  if (user?.role === "sub_admin") return <Navigate to="/admin" replace/>;
+  if (user?.role !== "employee" && user?.role !== "admin") return <Navigate to="/dashboard" replace/>;
+  return <SalaryPage/>;
+}
+
 function AppRouter() {
   return (
     <Routes>
@@ -55,6 +63,7 @@ function AppRouter() {
       <Route path="/leave" element={<ProtectedRoute><LeavePage/></ProtectedRoute>}/>
       <Route path="/profile" element={<ProtectedRoute><ProfilePage/></ProtectedRoute>}/>
       <Route path="/wishes" element={<ProtectedRoute><WishesPage/></ProtectedRoute>}/>
+      <Route path="/salary" element={<ProtectedRoute><SalaryGate/></ProtectedRoute>}/>
       <Route path="/admin" element={<ProtectedRoute managerOnly><AdminPanel/></ProtectedRoute>}/>
       <Route path="/admin/reports" element={<ProtectedRoute managerOnly><Reports/></ProtectedRoute>}/>
       <Route path="*" element={<Navigate to="/" replace/>}/>

@@ -13,6 +13,11 @@ db = MongoClient(os.environ.get('MONGO_URL', 'mongodb://localhost:27017'))[os.en
 ADMIN = {"Authorization": "Bearer test_session_admin_001"}
 SUB = {"Authorization": "Bearer test_session_subadmin_001"}
 RAVI_EMAIL, RAVI_PW = "emp1.test@gtgroups.local", "RaviReset@26"
+_PAYROLL = {
+    "uan": "100200300401", "esi": "1234567890",
+    "account_holder": "Test Employee", "account_number": "123456789012",
+    "ifsc": "SBIN0001234", "bank_name": "State Bank of India",
+}
 
 
 def login(email, pw, headers=None):
@@ -36,7 +41,7 @@ def temp_emp():
     email = f"test_pw_{uuid.uuid4().hex[:6]}@gtgroups.local"
     r = requests.post(f"{API}/admin/employees", headers=ADMIN, json={
         "name": "TEST_PW Emp", "email": email, "password": "TempPass@123",
-        "department": "Field Operations"})
+        "department": "Field Operations", **_PAYROLL})
     assert r.status_code == 200, r.text
     emp = r.json()["employee"]
     assert no_hash(r.json())

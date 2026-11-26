@@ -221,10 +221,10 @@ const Field = ({ label, children }) => (
 
 const inputCls = "w-full bg-background border border-border px-3 py-2 text-sm";
 
-function Modal({ title, subtitle, onClose, children, testid }) {
+function Modal({ title, subtitle, onClose, children, testid, wide = false }) {
   return (
     <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm grid place-items-center p-4 overflow-y-auto" onClick={onClose} data-testid={testid}>
-      <div className="bg-card border border-border max-w-lg w-full my-8" onClick={(e) => e.stopPropagation()}>
+        <div className={`bg-card border border-border w-full my-8 ${wide ? "max-w-2xl" : "max-w-lg"}`} onClick={(e) => e.stopPropagation()}>
         <div className="p-4 border-b border-border flex items-center justify-between">
           <div>
             <div className="label-overline">{title}</div>
@@ -270,10 +270,27 @@ function EmployeeFormModal({ org, isAdmin, onClose, onSave }) {
   const [f, setF] = useState({
     name: "", email: "", department: "", site: "", manager_id: "", designation: "",
     phone: "", employee_code: "", role: "employee", password: "", shift_start: "", shift_end: "", break_max_minutes: 60,
+    uan: "", epf_not_applicable: false, esi: "", esi_not_applicable: false,
+    account_holder: "", account_number: "", ifsc: "", bank_name: "",
   });
   const set = (k) => (e) => setF(prev => ({ ...prev, [k]: e.target.value }));
+  const save = () => {
+    if (!f.name.trim() || !f.email.trim()) return toast.error("Name and work email are required");
+    if ((f.password || "").length < 8) return toast.error("Set a first password of at least 8 characters");
+    if (!f.epf_not_applicable && !/^\d{12}$/.test(f.uan.replace(/\s/g, ""))) return toast.error("PF UAN must be 12 digits, or mark PF as not applicable");
+    const esi = f.esi.replace(/\s/g, "");
+    if (!f.esi_not_applicable && !/^\d{10}$|^\d{17}$/.test(esi)) return toast.error("ESI number must be 10 or 17 digits, or mark ESI as not applicable");
+    if (!f.account_number.replace(/\s/g, "") || !f.ifsc.trim() || !f.bank_name.trim()) return toast.error("Account number, IFSC and bank name are required");
+    onSave({
+      ...f,
+      break_max_minutes: Number(f.break_max_minutes) || 60,
+      account_holder: f.account_holder.trim() || f.name.trim(),
+      uan: f.epf_not_applicable ? "" : f.uan.replace(/\s/g, ""),
+      esi: f.esi_not_applicable ? "" : esi,
+    });
+  };
   return (
-    <Modal title="Add Employee" subtitle="Create their record and share their first password" onClose={onClose} testid="add-employee-modal">
+    <Modal title="Add Employee" subtitle="Job record, PF, ESI and bank account" onClose={onClose} testid="add-employee-modal" wide>
       <div className="p-5 space-y-4">
         <div className="grid sm:grid-cols-2 gap-3">
           <Field label="Full Name"><input value={f.name} onChange={set("name")} className={inputCls} data-testid="new-emp-name"/></Field>
@@ -312,15 +329,34 @@ function EmployeeFormModal({ org, isAdmin, onClose, onSave }) {
             </Field>
           )}
         </div>
+        <div className="border border-border p-3 space-y-3" data-testid="new-emp-payroll">
+          <div className="label-overline">Payroll details</div>
+          <div className="grid sm:grid-cols-2 gap-3">
+            <Field label="PF UAN">
+              <input value={f.uan} onChange={set("uan")} disabled={f.epf_not_applicable} inputMode="numeric" maxLength={14}
+                placeholder={f.epf_not_applicable ? "Not applicable" : "12 digits"} className={`${inputCls} font-mono disabled:opacity-40`} data-testid="new-emp-uan"/>
+            </Field>
+            <Field label="ESI number">
+              <input value={f.esi} onChange={set("esi")} disabled={f.esi_not_applicable} inputMode="numeric" maxLength={19}
+                placeholder={f.esi_not_applicable ? "Not applicable" : "10 or 17 digits"} className={`${inputCls} font-mono disabled:opacity-40`} data-testid="new-emp-esi"/>
+            </Field>
+          </div>
+          <div className="flex flex-wrap gap-4 text-sm">
+            <label className="flex items-center gap-2"><input type="checkbox" checked={f.epf_not_applicable} data-testid="new-emp-epf-na" className="accent-[#0047FF]" onChange={e => setF(prev => ({ ...prev, epf_not_applicable: e.target.checked, uan: e.target.checked ? "" : prev.uan }))}/> PF not applicable</label>
+            <label className="flex items-center gap-2"><input type="checkbox" checked={f.esi_not_applicable} data-testid="new-emp-esi-na" className="accent-[#0047FF]" onChange={e => setF(prev => ({ ...prev, esi_not_applicable: e.target.checked, esi: e.target.checked ? "" : prev.esi }))}/> ESI not applicable</label>
+          </div>
+          <div className="grid sm:grid-cols-2 gap-3">
+            <Field label="Account holder"><input value={f.account_holder} onChange={set("account_holder")} placeholder="Defaults to the employee name" className={inputCls} data-testid="new-emp-account-holder"/></Field>
+            <Field label="Bank name"><input value={f.bank_name} onChange={set("bank_name")} className={inputCls} data-testid="new-emp-bank"/></Field>
+            <Field label="Account number"><input value={f.account_number} onChange={set("account_number")} inputMode="numeric" className={`${inputCls} font-mono`} data-testid="new-emp-account"/></Field>
+            <Field label="IFSC"><input value={f.ifsc} onChange={e => setF(prev => ({ ...prev, ifsc: e.target.value.toUpperCase() }))} placeholder="SBIN0001234" className={`${inputCls} font-mono`} data-testid="new-emp-ifsc"/></Field>
+          </div>
+        </div>
         <p className="text-[11px] text-muted-foreground">
-          Share the first password with them directly — they sign in with this email and are asked to set their own password straight away.
+          Share the first password with them directly — they sign in with this email and are asked to set their own password straight away. PF, ESI and the bank account are saved now, so salary can be paid without a second step.
         </p>
         <div className="flex items-center gap-2 pt-1">
-          <button onClick={() => {
-              if (!f.name.trim() || !f.email.trim()) return toast.error("Name and work email are required");
-              if ((f.password || "").length < 8) return toast.error("Set a first password of at least 8 characters");
-              onSave({ ...f, break_max_minutes: Number(f.break_max_minutes) || 60 });
-            }} data-testid="save-new-emp"
+          <button onClick={save} data-testid="save-new-emp"
             className="flex-1 bg-foreground text-background px-4 py-3 hover:bg-primary transition-colors font-medium">Add to Team</button>
           <button onClick={onClose} className="border border-border px-4 py-3 hover:bg-secondary">Cancel</button>
         </div>
