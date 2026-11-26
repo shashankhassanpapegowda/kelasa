@@ -51,6 +51,13 @@ def active_job() -> Optional[dict]:
         return next((j for j in _jobs.values() if j["status"] == "running"), None)
 
 
+def latest_job() -> Optional[dict]:
+    """The running job, else the newest finished one that can still be downloaded."""
+    with _lock:
+        live = [j for j in _jobs.values() if j["status"] in ("running", "done")]
+        return max(live, key=lambda j: (j["status"] == "running", j["started_at"]), default=None)
+
+
 def get_job(job_id: str) -> Optional[dict]:
     return _jobs.get(job_id)
 

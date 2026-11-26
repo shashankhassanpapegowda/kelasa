@@ -1,0 +1,32 @@
+{
+  "summary": "Iteration 20: tested the Full Data Export feature (admin only). Backend: 11/11 pytest pass. Sub-admin and employee get 403 on start/current/status/download; no auth gets 401; an unknown job_id gets 404. Start returns a job_id, and a second start while the first is running returns 409 'An export is already running'. The export finishes in under 1s: progress 100, size_bytes>0, stage 'Ready', manifest_summary present. Download sends application/zip with filename kelasa-export-YYYY-MM-DD-HHmm.zip, and its byte size equals size_bytes. The ZIP has db/<name>.json for all 24 live collections. Line counts equal the manifest counts, which equal the live counts (no mismatches). _indexes.json covers every collection. The photos/ entry count equals photo_count (1), and photos_referenced = photo_count + missing. users.json has password_hash fields. No .env files, and no values of EMERGENT_EMAIL_KEY, VAPID_PRIVATE_KEY or WEBHOOK_CRON_SECRET, appear anywhere in the ZIP (EMERGENT_LLM_KEY is not in backend/.env). mongoimport of users, attendance and activity_log into a scratch DB gives documents identical to the originals and to live users (ObjectId preserved). The scratch DB was dropped. The live DB has no BSON Date fields (all dates are ISO strings), so a separate probe imported a doc with datetime, Int64, ObjectId and nested dates using the same JSON_OPTS: identical after the round trip. Activity log has action=data_export, target_name=admin.test@gtgroups.local, and a timestamp. A new export after one finishes works. Frontend: admin /admin#settings shows the Settings tab, data-export-card and data-export-warning. Clicking Export goes to 100% with a summary; Download produced a valid ZIP named kelasa-export-2026-11-26-1326.zip that contains manifest.json; New export works. Sub-admin sees no Settings tab and no card. Regression: the Overview, Team and /admin/reports pages load with no page errors.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "GET /api/admin/export/current", "issue": "Returns only a RUNNING job. After a page reload, a finished export that can still be downloaded (kept 1 hour) is no longer shown, so the admin must run a new export. Consider returning the latest done, not-expired job too."},
+      {"endpoint": "GET /api/admin/export/download/{job_id}", "issue": "Filename timestamp differs between server and browser. The server Content-Disposition uses DEFAULT_TZ (IST), e.g. kelasa-export-2026-11-26-1855.zip. The frontend ignores that header and builds a name from the browser's local time (stampName), e.g. ...-1326.zip in a UTC browser. Use the server filename or a single timezone."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": ["/app/backend/tests/test_iter20_data_export.py", "/app/backend/tests/probe_iter20_date_roundtrip.py", "/app/test_reports/pytest/pytest_iter20.xml"],
+  "action_items": [
+    "Optional: let /admin/export/current (or a new 'latest' endpoint) return the last done, not-expired job so Download survives a page reload",
+    "Optional: make the downloaded filename consistent (use the server Content-Disposition name, or the same timezone)"
+  ],
+  "critical_code_review_comments": [
+    "Jobs are in-memory and cleanup_stale() wipes EXPORT_DIR on startup. A backend reload during or after an export loses the job (the UI shows 'Lost track of the export'). This is acceptable but worth knowing.",
+    "The frontend downloads the ZIP with axios responseType blob, which holds the whole file in browser memory. Fine for the current 42 KB. For large photo sets, prefer a direct link (e.g. a short-lived token query param) so the browser streams it to disk.",
+    "_collect_paths treats any string starting with 'gtg-attendance/' as a photo path. That is fine, but missing photos are only logged and listed (as intended).",
+    "The expiry Timer is created from the daemon export thread, so it inherits daemon=True and will not block shutdown. OK."
+  ],
+  "updated_files": ["/app/backend/tests/test_iter20_data_export.py", "/app/backend/tests/probe_iter20_date_roundtrip.py"],
+  "success_rate": {"backend": "100%", "frontend": "100%"},
+  "seed_data_creation": "None. Test runs added data_export entries to activity_log (from the API) and left several export ZIPs in /tmp/kelasa-exports, which expire after 1 hour. The scratch DBs TEST_export_roundtrip_scratch and TEST_export_date_scratch were dropped. test_database was not modified apart from the activity log entries and the test session expiry refresh.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Run: cd /app/backend && python -m pytest tests/test_iter20_data_export.py -v -s (the tests use a module STATE dict and must run in order, no xdist). Exports finish in under 1s, so the 409 check can sometimes miss. It hit 409 this run. Refresh test sessions with the mongosh command in test_credentials.md first."
+}

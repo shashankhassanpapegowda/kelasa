@@ -3444,9 +3444,12 @@ async def decide_regularization(request_id: str, payload: RegularizationDecision
     return {"ok": True}
 
 # ---------- Full data export (admin only) ----------
+def _export_filename(job: dict) -> str:
+    return f"kelasa-export-{parse_iso(job['started_at']).astimezone(ZoneInfo(DEFAULT_TZ)).strftime('%Y-%m-%d-%H%M')}.zip"
+
 def _export_view(job: dict) -> dict:
-    return {k: job.get(k) for k in ("job_id", "status", "progress", "size_bytes", "error", "stage", "started_at",
-                                    "finished_at", "manifest_summary")}
+    return {**{k: job.get(k) for k in ("job_id", "status", "progress", "size_bytes", "error", "stage", "started_at",
+                                       "finished_at", "manifest_summary")}, "filename": _export_filename(job)}
 
 @api_router.post("/admin/export/start")
 async def export_start(user: dict = Depends(require_admin)):
@@ -3459,7 +3462,7 @@ async def export_start(user: dict = Depends(require_admin)):
 
 @api_router.get("/admin/export/current")
 async def export_current(user: dict = Depends(require_admin)):
-    job = export_job.active_job()
+    job = export_job.latest_job()
     return {"job": _export_view(job) if job else None}
 
 @api_router.get("/admin/export/status/{job_id}")
@@ -3474,8 +3477,7 @@ async def export_download(job_id: str, user: dict = Depends(require_admin)):
     job = export_job.get_job(job_id)
     if not job or job["status"] != "done" or not os.path.exists(job["file"]):
         raise HTTPException(status_code=404, detail="Export file not available")
-    stamp = parse_iso(job["started_at"]).astimezone(ZoneInfo(DEFAULT_TZ)).strftime("%Y-%m-%d-%H%M")
-    return FileResponse(job["file"], media_type="application/zip", filename=f"kelasa-export-{stamp}.zip")
+    return FileResponse(job["file"], media_type="application/zip", filename=_export_filename(job))
 
 # ---------- Monthly payroll summary ----------
 def _hm(m: int) -> str:

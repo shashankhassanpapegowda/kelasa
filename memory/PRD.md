@@ -208,3 +208,9 @@ Employee attendance and route-tracking app, now expanding into a full **employee
 - Regularization: POST /api/regularizations, GET /mine, POST /{id}/cancel. Admin: GET /api/admin/regularizations, POST /{id}/decide (a note is required to reject; approval is blocked while the employee is still checked in that day). Approval rewrites the first record of the day (originals kept) and marks the other records that day superseded_by (net 0, originals kept). Push notification and activity log entries.
 - Console: a new "Corrections" tab with a pending badge. "Face Checks" became a "Selfies" gallery (GET /admin/face-checks is still used). Team has no face tags or reset.
 - Tested: iteration_19 (backend 16/16, frontend all flows). All its minor issues are fixed.
+
+## 2026-11 — Full Data Export (admin only)
+- backend/export_job.py runs a background thread with its own pymongo client. It writes a ZIP to /tmp/kelasa-exports: db/<every collection>.json (canonical Extended JSON, one doc per line, batches of 1000), db/_indexes.json, photos/<storage path> (any string starting "gtg-attendance/" anywhere in a doc), and manifest.json (counts, photos, missing/empty photos, db name, git commit). One job at a time (409). The ZIP is deleted 1h after it's done, and stale ones are wiped on startup. Jobs live in memory.
+- Endpoints (require_admin): POST /api/admin/export/start, GET /api/admin/export/status/{id}, GET /api/admin/export/current (running or latest downloadable), GET /api/admin/export/download/{id} (filename kelasa-export-YYYY-MM-DD-HHmm.zip in IST). Activity "data_export" is logged with the admin email.
+- UI: console Settings tab (admin only) > Data Export card (warning, progress bar, Download ZIP).
+- Verified: manifest and line counts = live counts, and a mongoimport round-trip is identical. iteration_20: 100% backend+frontend. Its 2 minor issues are fixed.

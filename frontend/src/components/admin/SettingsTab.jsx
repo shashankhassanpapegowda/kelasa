@@ -4,11 +4,6 @@ import { toast } from "sonner";
 import { Database, DownloadSimple, ShieldWarning, ArrowClockwise } from "@phosphor-icons/react";
 
 const fmtSize = (b) => (b > 1048576 ? `${(b / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round((b || 0) / 1024))} KB`);
-const stampName = (iso) => {
-  const d = new Date(iso || Date.now());
-  const p = (n) => String(n).padStart(2, "0");
-  return `kelasa-export-${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}.zip`;
-};
 
 export const DataExportCard = () => {
   const [job, setJob] = useState(null);
@@ -39,7 +34,7 @@ export const DataExportCard = () => {
     try {
       const res = await api.get(`/admin/export/download/${job.job_id}`, { responseType: "blob" });
       const a = document.createElement("a");
-      a.href = URL.createObjectURL(res.data); a.download = stampName(job.started_at); a.click();
+      a.href = URL.createObjectURL(res.data); a.download = job.filename; a.click();
       setTimeout(() => URL.revokeObjectURL(a.href), 5000);
       toast.success("Export downloaded");
     } catch { toast.error("Download failed — the file may have expired. Start a new export."); }
