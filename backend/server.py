@@ -34,6 +34,11 @@ import export_job
 import selfie_retention
 from fastapi.responses import FileResponse
 from attendance_calc import shift_minutes, compute_session, session_cap, day_status, DEFAULT_WEEKLY_OFF
+from work_timing import (
+    DayTiming, cap_shift, early_minutes, late_minutes, manager_may_edit,
+    resolve_day, split_editable, summarize_override, summarize_week,
+    validate_grace, validate_override, validate_week,
+)
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
@@ -147,6 +152,27 @@ class ShiftUpdate(BaseModel):
     shift_end: Optional[str] = None    # "HH:MM"
     break_max_minutes: Optional[int] = None
     timezone: Optional[str] = None
+
+class WorkTimingIn(BaseModel):
+    grace_minutes: int = 10
+    week: dict
+
+class WorkTimingOverrideIn(BaseModel):
+    working: bool
+    start: Optional[str] = None
+    end: Optional[str] = None
+    break_minutes: Optional[int] = None
+
+class WorkTimingCopyIn(BaseModel):
+    from_user_id: str
+    to_user_ids: List[str]
+
+class WorkTimingApplyIn(BaseModel):
+    grace_minutes: int = 10
+    week: dict
+    user_ids: Optional[List[str]] = None
+    site: Optional[str] = None
+    department: Optional[str] = None
 
 class TrackingModeUpdate(BaseModel):
     tracking_mode: str  # "duty_only" | "always_on"
@@ -933,6 +959,9 @@ async def ensure_indexes():
     await db.password_reset_tokens.create_index("expires_at", expireAfterSeconds=0)
     await db.password_reset_tokens.create_index("token", unique=True)
     await db.login_attempts.create_index("identifier", unique=True)
+    await db.work_schedules.create_index("user_id", unique=True)
+    await db.work_schedule_overrides.create_index([("user_id", 1), ("date", 1)], unique=True)
+    await db.work_timing_audit.create_index([("user_id", 1), ("created_at", -1)])
 
 # ---------- File Serving ----------
 @api_router.get("/files/{path:path}")
@@ -962,6 +991,159 @@ async def download_file(path: str, request: Request, auth: Optional[str] = Query
         raise HTTPException(status_code=404, detail="File not found") from None
     return Response(content=data, media_type=content_type)
 
+# ---------- Work timings ----------
+def _checked(fn, *args):
+    try:
+        return fn(*args)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from None
+
+def _parse_day(value: str) -> ddate:
+    try:
+        return ddate.fromisoformat(value)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Use a YYYY-MM-DD date") from None
+
+async def load_resolution(users: dict, dates: list):
+    """user_id -> (day -> DayTiming). One schedule read and one override read."""
+    ids = [uid for uid in users if uid]
+    if not ids:
+        def empty(uid, day: ddate) -> DayTiming:
+            u = users.get(uid) or {}
+            return resolve_day(day, None, None, u.get("shift_start"), u.get("shift_end"))
+        return empty
+    scheds = {s["user_id"]: s for s in await db.work_schedules.find(
+        {"user_id": {"$in": ids}}, {"_id": 0}).to_list(len(ids))}
+    ovs = {}
+    unique_dates = list({d for d in dates if d})
+    if unique_dates:
+        found = await db.work_schedule_overrides.find(
+            {"user_id": {"$in": ids}, "date": {"$in": unique_dates}}, {"_id": 0}
+        ).to_list(max(len(ids) * len(unique_dates), 1))
+        ovs = {(o["user_id"], o["date"]): o for o in found}
+
+    def resolve(uid, day: ddate) -> DayTiming:
+        u = users.get(uid) or {}
+        return resolve_day(
+            day, scheds.get(uid), ovs.get((uid, day.isoformat())),
+            u.get("shift_start"), u.get("shift_end"),
+        )
+    return resolve
+
+async def timing_for_user(user: dict, day: ddate) -> DayTiming:
+    resolve = await load_resolution({user["user_id"]: user}, [day.isoformat()])
+    return resolve(user["user_id"], day)
+
+def timing_public(timing: DayTiming):
+    return timing.public() if timing.uses_schedule else None
+
+def timing_csv(timing: Optional[dict]) -> str:
+    if not timing:
+        return ""
+    if timing.get("off") or not timing.get("working"):
+        return "Off"
+    br = f" break {timing['break_minutes']}m" if timing.get("break_minutes") is not None else ""
+    return f"{timing.get('start')}-{timing.get('end')}{br}"
+
+async def ensure_can_edit_timing(actor: dict, target_id: str) -> dict:
+    target = await db.users.find_one(
+        {"user_id": target_id}, {"_id": 0, "face_descriptor": 0, "password_hash": 0}
+    )
+    if not target:
+        raise HTTPException(status_code=404, detail="Employee not found")
+    scope = await scoped_user_ids(actor)
+    reason = manager_may_edit(actor, target, scope is None or target_id in scope)
+    if reason:
+        raise HTTPException(status_code=403, detail=reason)
+    return target
+
+async def record_timing_change(actor: dict, target: dict, action: str, summary: str):
+    await db.work_timing_audit.insert_one({
+        "audit_id": f"wta_{uuid.uuid4().hex[:12]}",
+        "actor_id": actor["user_id"],
+        "actor_name": actor.get("name"),
+        "actor_role": actor.get("role"),
+        "user_id": target["user_id"],
+        "target_name": target.get("name") or target.get("email") or target["user_id"],
+        "action": action,
+        "summary": summary,
+        "created_at": now_utc().isoformat(),
+    })
+    await log_activity(actor, action, target.get("name") or target["user_id"], summary)
+
+async def save_week(actor: dict, target: dict, grace: int, week: dict, action: str, summary: str):
+    await db.work_schedules.update_one(
+        {"user_id": target["user_id"]},
+        {"$set": {
+            "user_id": target["user_id"],
+            "grace_minutes": grace,
+            "week": week,
+            "updated_at": now_utc().isoformat(),
+            "updated_by": actor["user_id"],
+        }},
+        upsert=True,
+    )
+    await record_timing_change(actor, target, action, summary)
+
+async def timing_targets(actor: dict, user_ids: Optional[List[str]], site: Optional[str], department: Optional[str]):
+    clauses = []
+    ids = [uid for uid in (user_ids or []) if uid]
+    site = (site or "").strip()
+    department = (department or "").strip()
+    if ids:
+        clauses.append({"user_id": {"$in": ids}})
+    if site or department:
+        match = {}
+        if site:
+            match["site"] = site
+        if department:
+            match["department"] = department
+        clauses.append(match)
+    if not clauses:
+        raise HTTPException(status_code=400, detail="Choose employees, a branch, or a department")
+    query = clauses[0] if len(clauses) == 1 else {"$or": clauses}
+    found = await db.users.find(
+        query, {"_id": 0, "user_id": 1, "name": 1, "role": 1, "email": 1}
+    ).to_list(5000)
+    uniq = {u["user_id"]: u for u in found}
+    if not uniq:
+        raise HTTPException(status_code=400, detail="No employees matched")
+    scope = await scoped_user_ids(actor)
+    allowed, skipped = split_editable(actor, uniq.values(), scope)
+    if not allowed:
+        detail = skipped[0]["reason"] if len(skipped) == 1 else "None of those employees are in your team"
+        raise HTTPException(status_code=403, detail=detail)
+    return allowed, skipped
+
+async def work_timing_view(target: dict) -> dict:
+    sched = await db.work_schedules.find_one({"user_id": target["user_id"]}, {"_id": 0})
+    overrides = await db.work_schedule_overrides.find(
+        {"user_id": target["user_id"]}, {"_id": 0}
+    ).sort("date", -1).to_list(500)
+    audit = await db.work_timing_audit.find(
+        {"user_id": target["user_id"]}, {"_id": 0}
+    ).sort("created_at", -1).to_list(12)
+    schedule = None
+    if sched and sched.get("week"):
+        schedule = {
+            "grace_minutes": int(sched.get("grace_minutes") if sched.get("grace_minutes") is not None else 10),
+            "week": sched.get("week") or {},
+            "updated_at": sched.get("updated_at"),
+            "updated_by": sched.get("updated_by"),
+        }
+    return {
+        "user_id": target["user_id"],
+        "name": target.get("name"),
+        "legacy_shift": {"start": target.get("shift_start"), "end": target.get("shift_end")},
+        "schedule": schedule,
+        "overrides": [{
+            "date": o.get("date"), "working": bool(o.get("working")),
+            "start": o.get("start"), "end": o.get("end"), "break_minutes": o.get("break_minutes"),
+            "updated_at": o.get("updated_at"), "updated_by": o.get("updated_by"),
+        } for o in overrides],
+        "audit": audit,
+    }
+
 # ---------- Attendance ----------
 def require_selfie(image_b64: str):
     raw = (image_b64 or "").split(",", 1)[-1]
@@ -981,8 +1163,13 @@ async def check_in(payload: CheckRequest, user: dict = Depends(get_current_user)
     branch = await enforce_geofence(user, payload.lat, payload.lng, payload.accuracy, "in")
 
     today = user_local_today(user)
-    check_in_iso = now_utc().isoformat()
-    late_by = compute_late_minutes(check_in_iso, user)
+    punched = now_utc()
+    check_in_iso = punched.isoformat()
+    timing = await timing_for_user(user, ddate.fromisoformat(today))
+    if timing.uses_schedule:
+        late_by = late_minutes(punched, ddate.fromisoformat(today), timing, user.get("timezone") or DEFAULT_TZ)
+    else:
+        late_by = compute_late_minutes(check_in_iso, user)
     photo_path = upload_face_image(user["user_id"], payload.image_b64, "checkin")
     record_id = f"att_{uuid.uuid4().hex[:12]}"
     doc = {
@@ -1035,9 +1222,12 @@ async def check_out(payload: CheckRequest, user: dict = Depends(get_current_user
         check_in_dt = check_in_dt.replace(tzinfo=timezone.utc)
     out_dt = now_utc()
     tz_name = user.get("timezone") or DEFAULT_TZ
+    day = ddate.fromisoformat(active["date"]) if active.get("date") else user_local_now(user).date()
+    timing = await timing_for_user(user, day)
+    cap_start, cap_end = cap_shift(timing, user.get("shift_start"), user.get("shift_end"))
     auto_closed = out_dt > session_cap(active["check_in"], tz_name, None, None)
     if auto_closed:
-        out_dt = session_cap(active["check_in"], tz_name, user.get("shift_start"), user.get("shift_end"))
+        out_dt = session_cap(active["check_in"], tz_name, cap_start, cap_end)
     break_minutes = int(active.get("total_break_minutes", 0))
     calc = compute_session(active["check_in"], out_dt.isoformat(), break_minutes, user.get("shift_start"), user.get("shift_end"))
     total_minutes, net_minutes = calc["duration_minutes"], calc["net_work_minutes"]
@@ -1062,6 +1252,7 @@ async def check_out(payload: CheckRequest, user: dict = Depends(get_current_user
             "auto_closed": auto_closed,
             "auto_close_reason": "missed checkout (checked out on a later day)" if auto_closed else None,
             "over_break": over_break,
+            **({"early_by_minutes": early_minutes(out_dt, day, timing, tz_name)} if timing.uses_schedule else {}),
         }}
     )
     await db.locations.insert_one({
@@ -1166,7 +1357,8 @@ async def attendance_today(user: dict = Depends(get_current_user)):
     records = await db.attendance.find(
         {"user_id": user["user_id"], "date": today}, {"_id": 0}
     ).sort("check_in", 1).to_list(100)
-    return {"active": active, "today_records": records}
+    timing = await timing_for_user(user, ddate.fromisoformat(today))
+    return {"active": active, "today_records": records, "timing": timing_public(timing)}
 
 @api_router.get("/attendance/me")
 async def attendance_history(user: dict = Depends(get_current_user), limit: int = 60):
@@ -1235,12 +1427,18 @@ async def auto_close_stale_sessions():
         return 0
     users = {u["user_id"]: u for u in await db.users.find(
         {"user_id": {"$in": list({o["user_id"] for o in opens})}}, {"_id": 0, "face_descriptor": 0}).to_list(5000)}
+    resolve = await load_resolution(users, [o.get("date") for o in opens])
     closed = 0
     for rec in opens:
         u = users.get(rec["user_id"], {})
         tz = u.get("timezone") or DEFAULT_TZ
         if now > session_cap(rec["check_in"], tz, None, None):
-            await close_session(rec, u, session_cap(rec["check_in"], tz, u.get("shift_start"), u.get("shift_end")), "missed checkout")
+            if rec.get("date"):
+                timing = resolve(rec["user_id"], ddate.fromisoformat(rec["date"]))
+                start, end = cap_shift(timing, u.get("shift_start"), u.get("shift_end"))
+            else:
+                start, end = u.get("shift_start"), u.get("shift_end")
+            await close_session(rec, u, session_cap(rec["check_in"], tz, start, end), "missed checkout")
             closed += 1
     return closed
 
@@ -1410,6 +1608,97 @@ async def admin_set_shift(user_id: str, payload: ShiftUpdate, user: dict = Depen
     await log_activity(user, "shift_updated", (emp or {}).get("name", user_id), ", ".join(f"{k}={v}" for k, v in updates.items()))
     return {"ok": True, "employee": emp}
 
+@api_router.get("/me/work-timing")
+async def my_work_timing(date: Optional[str] = None, user: dict = Depends(get_current_user)):
+    day = _parse_day(date) if date else local_today_date(user)
+    timing = await timing_for_user(user, day)
+    return {"date": day.isoformat(), "timing": timing_public(timing)}
+
+@api_router.get("/admin/employees/{user_id}/work-timing")
+async def admin_get_work_timing(user_id: str, user: dict = Depends(require_manager)):
+    target = await ensure_can_edit_timing(user, user_id)
+    return await work_timing_view(target)
+
+@api_router.put("/admin/employees/{user_id}/work-timing")
+async def admin_put_work_timing(user_id: str, payload: WorkTimingIn, user: dict = Depends(require_manager)):
+    target = await ensure_can_edit_timing(user, user_id)
+    grace = _checked(validate_grace, payload.grace_minutes)
+    week = _checked(validate_week, payload.week)
+    await save_week(user, target, grace, week, "work_timing_updated", summarize_week(week, grace))
+    return {"ok": True, **await work_timing_view(target)}
+
+@api_router.delete("/admin/employees/{user_id}/work-timing")
+async def admin_clear_work_timing(user_id: str, user: dict = Depends(require_manager)):
+    target = await ensure_can_edit_timing(user, user_id)
+    res = await db.work_schedules.delete_one({"user_id": user_id})
+    if not res.deleted_count:
+        raise HTTPException(status_code=404, detail="No weekly timing to clear")
+    await record_timing_change(user, target, "work_timing_cleared", "weekly timing cleared; one-day overrides kept")
+    return {"ok": True}
+
+@api_router.put("/admin/employees/{user_id}/work-timing/overrides/{day}")
+async def admin_put_work_override(user_id: str, day: str, payload: WorkTimingOverrideIn, user: dict = Depends(require_manager)):
+    target = await ensure_can_edit_timing(user, user_id)
+    parsed = _parse_day(day)
+    entry = _checked(validate_override, payload.model_dump())
+    update = {"$set": {
+        **entry, "user_id": user_id, "date": parsed.isoformat(),
+        "updated_at": now_utc().isoformat(), "updated_by": user["user_id"],
+    }}
+    if not entry.get("working"):
+        update["$unset"] = {"start": "", "end": "", "break_minutes": ""}
+    await db.work_schedule_overrides.update_one({"user_id": user_id, "date": parsed.isoformat()}, update, upsert=True)
+    await record_timing_change(user, target, "work_timing_override", summarize_override(parsed.isoformat(), entry))
+    return {"ok": True, **await work_timing_view(target)}
+
+@api_router.delete("/admin/employees/{user_id}/work-timing/overrides/{day}")
+async def admin_clear_work_override(user_id: str, day: str, user: dict = Depends(require_manager)):
+    target = await ensure_can_edit_timing(user, user_id)
+    parsed = _parse_day(day)
+    res = await db.work_schedule_overrides.delete_one({"user_id": user_id, "date": parsed.isoformat()})
+    if not res.deleted_count:
+        raise HTTPException(status_code=404, detail="No timing override on that day")
+    await record_timing_change(user, target, "work_timing_override_cleared", f"{parsed.isoformat()} override removed")
+    return {"ok": True}
+
+@api_router.post("/admin/work-timings/copy")
+async def copy_work_timing(payload: WorkTimingCopyIn, user: dict = Depends(require_manager)):
+    if not payload.to_user_ids:
+        raise HTTPException(status_code=400, detail="Choose at least one employee")
+    scope = await scoped_user_ids(user)
+    if scope is not None and payload.from_user_id not in scope:
+        raise HTTPException(status_code=403, detail="This employee is not in your team")
+    source = await db.users.find_one({"user_id": payload.from_user_id}, {"_id": 0, "user_id": 1, "name": 1})
+    if not source:
+        raise HTTPException(status_code=404, detail="Employee not found")
+    sched = await db.work_schedules.find_one({"user_id": payload.from_user_id}, {"_id": 0})
+    if not sched or not sched.get("week"):
+        raise HTTPException(status_code=400, detail="That employee has no weekly timing to copy")
+    allowed, skipped = await timing_targets(user, payload.to_user_ids, None, None)
+    allowed = [t for t in allowed if t["user_id"] != payload.from_user_id]
+    if not allowed:
+        raise HTTPException(status_code=400, detail="Choose other employees to copy this timing to")
+    summary = f"copied weekly timing from {source.get('name') or source['user_id']}"
+    grace = int(sched.get("grace_minutes") if sched.get("grace_minutes") is not None else 10)
+    for target in allowed:
+        await save_week(user, target, grace, sched["week"], "work_timing_copied", summary)
+    return {"ok": True, "updated": len(allowed), "skipped": skipped}
+
+@api_router.post("/admin/work-timings/apply")
+async def apply_work_timing(payload: WorkTimingApplyIn, user: dict = Depends(require_manager)):
+    grace = _checked(validate_grace, payload.grace_minutes)
+    week = _checked(validate_week, payload.week)
+    allowed, skipped = await timing_targets(user, payload.user_ids, payload.site, payload.department)
+    where = []
+    if (payload.site or "").strip():
+        where.append(f"branch {(payload.site or '').strip()}")
+    if (payload.department or "").strip():
+        where.append(f"department {(payload.department or '').strip()}")
+    summary = (("bulk " + ", ".join(where) + ": ") if where else "bulk: ") + summarize_week(week, grace)
+    for target in allowed:
+        await save_week(user, target, grace, week, "work_timing_updated", summary)
+    return {"ok": True, "updated": len(allowed), "skipped": skipped}
+
 @api_router.patch("/admin/employees/{user_id}/tracking_mode")
 async def admin_set_tracking_mode(user_id: str, payload: TrackingModeUpdate, user: dict = Depends(require_admin)):
     if payload.tracking_mode not in ("duty_only", "always_on"):
@@ -1490,6 +1779,13 @@ async def admin_attendance(date: Optional[str] = None, user: dict = Depends(requ
     user_ids = list({r["user_id"] for r in records})
     users = await db.users.find({"user_id": {"$in": user_ids}}, {"_id": 0, "face_descriptor": 0, "password_hash": 0}).to_list(1000)
     umap = {u["user_id"]: u for u in users}
+    resolve = None
+    try:
+        day = ddate.fromisoformat(d)
+    except ValueError:
+        day = None
+    if day and umap:
+        resolve = await load_resolution(umap, [d])
     for r in records:
         u = umap.get(r["user_id"], {})
         r["name"] = u.get("name", "")
@@ -1497,6 +1793,8 @@ async def admin_attendance(date: Optional[str] = None, user: dict = Depends(requ
         r["picture"] = u.get("picture")
         r["shift_start"] = u.get("shift_start")
         r["shift_end"] = u.get("shift_end")
+        timing = resolve(r["user_id"], day) if resolve else None
+        r["timing"] = timing_public(timing) if timing else None
     return {"date": d, "records": records}
 
 @api_router.delete("/admin/employees/{user_id}/face")
@@ -2367,6 +2665,8 @@ async def build_report(from_date: str, to_date: str, user_ids=None) -> List[dict
 
     joined = {p["user_id"]: p.get("date_of_joining") for p in await db.employee_profiles.find(
         {"user_id": {"$in": [u["user_id"] for u in users]}}, {"_id": 0, "user_id": 1, "date_of_joining": 1}).to_list(5000)}
+    timed = {s["user_id"] for s in await db.work_schedules.find({}, {"_id": 0, "user_id": 1}).to_list(10000)}
+    timed.update(s["user_id"] for s in await db.work_schedule_overrides.find({}, {"_id": 0, "user_id": 1}).to_list(20000))
     rows = []
     for u in users:
         recs = by_user.get(u["user_id"], [])
@@ -2374,7 +2674,7 @@ async def build_report(from_date: str, to_date: str, user_ids=None) -> List[dict
         leave_dates = leave_dates_by_user.get(u["user_id"], set())
         holiday_dates = {h["date"] for h in holiday_docs if holiday_applies(h, u.get("site"))}
         has_shift = bool(u.get("shift_start"))
-        late_dates = {r["date"] for r in recs if has_shift and (r.get("late_by_minutes") or 0) > 0}
+        late_dates = {r["date"] for r in recs if (has_shift or u["user_id"] in timed) and (r.get("late_by_minutes") or 0) > 0}
         jd = joined.get(u["user_id"]) or (u.get("created_at") or "")[:10] or None
         counts: dict = {}
         today_d = datetime.now(ZoneInfo(u.get("timezone") or DEFAULT_TZ)).date()
@@ -3215,11 +3515,19 @@ async def run_checkout_reminders() -> int:
         return 0
     users = {u["user_id"]: u for u in await db.users.find(
         {"user_id": {"$in": list({o["user_id"] for o in opens})}}, {"_id": 0, "face_descriptor": 0, "password_hash": 0}).to_list(5000)}
+    resolve = await load_resolution(users, [o.get("date") for o in opens])
     sent = 0
     for rec in opens:
         u = users.get(rec["user_id"]) or {}
-        start, end = parse_hhmm(u.get("shift_start") or ""), parse_hhmm(u.get("shift_end") or "")
-        if not start or not end or end <= start:
+        end_label = u.get("shift_end")
+        start_s, end_s = u.get("shift_start"), u.get("shift_end")
+        if rec.get("date"):
+            timing = resolve(rec["user_id"], ddate.fromisoformat(rec["date"]))
+            start_s, end_s = cap_shift(timing, u.get("shift_start"), u.get("shift_end"))
+            if timing.uses_schedule and timing.working and timing.end:
+                end_label = timing.end
+        start, end = parse_hhmm(start_s or ""), parse_hhmm(end_s or "")
+        if not start or not end or end <= start or not end_label:
             continue
         tz = ZoneInfo(u.get("timezone") or DEFAULT_TZ)
         local_in = parse_iso(rec["check_in"]).astimezone(tz)
@@ -3234,7 +3542,7 @@ async def run_checkout_reminders() -> int:
         if subs:
             await push_to_subscriptions(subs, {
                 "title": "Forgot to check out?",
-                "body": f"Your shift ended at {u['shift_end']}. Tap to check out now — otherwise your hours will be counted only up to {u['shift_end']}.",
+                "body": f"Your shift ended at {end_label}. Tap to check out now — otherwise your hours will be counted only up to {end_label}.",
                 "tag": f"checkout_{rec['record_id']}", "url": "/dashboard",
             })
             sent += 1
@@ -3316,7 +3624,7 @@ def _month_bounds(month: str):
     return first, ddate(y + (m == 12), m % 12 + 1, 1) - timedelta(days=1)
 
 SESSION_KEYS = ("record_id", "check_in", "check_out", "net_work_minutes", "duration_minutes", "total_break_minutes",
-                "breaks", "late_by_minutes", "auto_closed", "auto_close_reason", "over_cap", "over_break", "regularized",
+                "breaks", "late_by_minutes", "early_by_minutes", "auto_closed", "auto_close_reason", "over_cap", "over_break", "regularized",
                 "check_in_branch", "check_out_branch", "status",
                 "check_in_photo_path", "check_out_photo_path", "photos_purged_at")
 
@@ -3345,6 +3653,12 @@ async def build_calendar(u: dict, month: str) -> dict:
     has_shift = bool(u.get("shift_start"))
     half = (shift_minutes(u.get("shift_start"), u.get("shift_end")) or 0) / 2
     today_d = local_today_date(u)
+    month_dates = []
+    cursor = first
+    while cursor <= last:
+        month_dates.append(cursor.isoformat())
+        cursor += timedelta(days=1)
+    resolve = await load_resolution({uid: u}, month_dates)
     days, counts = [], {}
     cur = first
     while cur <= last:
@@ -3353,8 +3667,9 @@ async def build_calendar(u: dict, month: str) -> dict:
         lv = leave_by_date.get(d)
         net = sum((x.get("net_work_minutes") or 0) for x in sess)
         open_now = any(not x.get("check_out") for x in sess)
+        shown = timing_public(resolve(uid, cur))
         status = day_status(cur, today=today_d, present=bool(sess),
-                            late=has_shift and any((x.get("late_by_minutes") or 0) > 0 for x in sess),
+                            late=(has_shift or bool(shown)) and any((x.get("late_by_minutes") or 0) > 0 for x in sess),
                             on_leave=bool(lv), holiday=d in hols, weekly_off=u.get("weekly_off", DEFAULT_WEEKLY_OFF),
                             has_shift=has_shift, joined=ddate.fromisoformat(jd) if jd else None,
                             pending_invite=bool(u.get("pending_invite")))
@@ -3369,7 +3684,7 @@ async def build_calendar(u: dict, month: str) -> dict:
         counts[status] = counts.get(status, 0) + 1
         days.append({"date": d, "status": status, "sessions": sess, "net_work_minutes": net,
                      "holiday": hols.get(d), "leave": {"leave_type": lv.get("leave_type"), "half_day": lv.get("half_day")} if lv else None,
-                     "regularization": regs.get(d)})
+                     "regularization": regs.get(d), "timing": shown})
         cur += timedelta(days=1)
     return {"month": month, "today": today_d.isoformat(), "days": days, "counts": counts,
             "total_work_minutes": sum(x["net_work_minutes"] for x in days),
@@ -3388,8 +3703,8 @@ async def my_calendar_csv(request: Request, month: str = Query(..., pattern=r"^\
     rows = [[d["date"], d["status"].replace("_", " ").title(),
              " | ".join(f"{fmt(x['check_in'])}-{fmt(x['check_out'])}" for x in d["sessions"]),
              _hm(d["net_work_minutes"]), sum((x.get("total_break_minutes") or 0) for x in d["sessions"]),
-             d["holiday"] or (d["leave"] or {}).get("leave_type") or ""] for d in cal["days"]]
-    return csv_response(["Date", "Status", "Sessions", "Work (h:mm)", "Break (min)", "Holiday / Leave"], rows, f"my_attendance_{month}.csv")
+             d["holiday"] or (d["leave"] or {}).get("leave_type") or "", timing_csv(d.get("timing"))] for d in cal["days"]]
+    return csv_response(["Date", "Status", "Sessions", "Work (h:mm)", "Break (min)", "Holiday / Leave", "Timing"], rows, f"my_attendance_{month}.csv")
 
 # ---------- Attendance correction (regularization) ----------
 def _local_iso(day: str, hhmm: str, tz_name: str) -> str:
@@ -3459,10 +3774,18 @@ async def apply_regularization(reg: dict, emp: dict):
     rec = day_recs[0] if day_recs else None
     breaks = sum(int(r.get("total_break_minutes") or 0) for r in day_recs)
     calc = compute_session(cin, cout, breaks, emp.get("shift_start"), emp.get("shift_end"))
+    day = ddate.fromisoformat(reg["date"])
+    timing = await timing_for_user(emp, day)
+    if timing.uses_schedule:
+        late = late_minutes(parse_iso(cin), day, timing, tz)
+    else:
+        late = compute_late_minutes(cin, emp)
     fields = {"check_in": cin, "check_out": cout, "status": "off_duty", "on_break": False, "auto_closed": False,
               "auto_close_reason": None, "regularized": True, "regularization_id": reg["request_id"],
-              "late_by_minutes": compute_late_minutes(cin, emp),
+              "late_by_minutes": late,
               "over_break": breaks > int(emp.get("break_max_minutes") if emp.get("break_max_minutes") is not None else 60), **calc}
+    if timing.uses_schedule:
+        fields["early_by_minutes"] = early_minutes(parse_iso(cout), day, timing, tz)
     if rec:
         keep = {} if rec.get("regularized") else {"original_check_in": rec.get("check_in"), "original_check_out": rec.get("check_out")}
         await db.attendance.update_one({"record_id": rec["record_id"]}, {"$set": {**fields, **keep}})

@@ -45,6 +45,8 @@ export const CalendarGrid = ({ days, today, selected, onSelect }) => {
           const isToday = d.date === today;
           return (
             <button key={d.date} onClick={() => onSelect(d.date)} data-testid={`cal-day-${d.date}`} data-status={d.status}
+              data-timing={d.timing ? (d.timing.off || !d.timing.working ? "off" : `${d.timing.start}-${d.timing.end}`) : ""}
+              title={d.timing ? (d.timing.off || !d.timing.working ? "Scheduled day off" : `Timing ${d.timing.start}–${d.timing.end}`) : undefined}
               className={`relative aspect-square sm:aspect-[5/4] rounded-md grid place-items-center text-base sm:text-lg font-semibold transition-transform hover:scale-[1.04] ${st.cell}
                 ${isToday ? "ring-2 ring-[#1D4ED8]" : ""} ${selected === d.date ? "outline outline-2 outline-offset-2 outline-foreground" : ""}`}>
               {Number(d.date.slice(8))}

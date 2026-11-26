@@ -128,6 +128,12 @@ export default function TeamTab({ isAdmin, currentUserId }) {
                   <button onClick={() => setViewing(emp)} className="text-[10px] label-overline hover:text-primary inline-flex items-center gap-1" data-testid={`profile-emp-${emp.user_id}`}>
                     <IdentificationCard size={11} weight="bold"/> PROFILE
                   </button>
+                  {(isAdmin || (emp.user_id !== currentUserId && emp.role === "employee")) && (
+                    <button onClick={() => { sessionStorage.setItem("kelasa.timingUser", emp.user_id); window.location.hash = "timings"; }}
+                      className="text-[10px] label-overline hover:text-primary inline-flex items-center gap-1" data-testid={`timing-emp-${emp.user_id}`}>
+                      <ClockIcon size={10} weight="bold"/> TIMING
+                    </button>
+                  )}
                   {(isAdmin || emp.user_id !== currentUserId) && (
                     <button onClick={() => setEditing(emp)} className="text-[10px] label-overline hover:text-primary inline-flex items-center gap-1" data-testid={`edit-emp-${emp.user_id}`}>
                       <PencilSimple size={10} weight="bold"/> EDIT
