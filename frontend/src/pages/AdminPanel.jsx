@@ -16,7 +16,8 @@ import CorrectionsTab from "@/components/admin/CorrectionsTab";
 import SettingsTab from "@/components/admin/SettingsTab";
 import { api } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
-import { Gauge, Broadcast, Users, AirplaneTilt, CalendarBlank, Megaphone, Buildings, ClockCounterClockwise, MapPinArea, BellRinging, Camera, PencilSimpleLine, GearSix } from "@phosphor-icons/react";
+import PayrollTab from "@/components/admin/PayrollTab";
+import { Gauge, Broadcast, Users, AirplaneTilt, CalendarBlank, Megaphone, Buildings, ClockCounterClockwise, MapPinArea, BellRinging, Camera, PencilSimpleLine, GearSix, CurrencyInr } from "@phosphor-icons/react";
 
 const TABS = [
   { id: "overview", label: "Overview", icon: Gauge },
@@ -32,6 +33,7 @@ const TABS = [
   { id: "org", label: "Organisation", icon: Buildings, adminOnly: true },
   { id: "activity", label: "Activity", icon: ClockCounterClockwise, adminOnly: true },
   { id: "settings", label: "Settings", icon: GearSix, adminOnly: true },
+  { id: "payroll", label: "Payroll", icon: CurrencyInr, adminOnly: true },
 ];
 
 export default function AdminPanel() {
@@ -128,6 +130,7 @@ export default function AdminPanel() {
             {tab === "settings" && isAdmin && <SettingsTab/>}
             {tab === "org" && isAdmin && <OrgTab/>}
             {tab === "activity" && isAdmin && <ActivityTab/>}
+            {tab === "payroll" && isAdmin && <PayrollTab/>}
           </div>
         </div>
       </main>

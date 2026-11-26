@@ -3,7 +3,7 @@ import { useAuth } from "@/lib/auth";
 import { api } from "@/lib/api";
 import AuthPhoto from "@/components/AuthPhoto";
 import { Link, useLocation, useNavigate } from "react-router-dom";
-import { SignOut, Gauge, MapTrifold, ChartBar, AirplaneTilt, Lock, UserCircle, HandHeart, CalendarDots } from "@phosphor-icons/react";
+import { SignOut, Gauge, MapTrifold, ChartBar, AirplaneTilt, Lock, UserCircle, HandHeart, CalendarDots, CurrencyInr } from "@phosphor-icons/react";
 
 export default function AppHeader() {
   const { user, logout } = useAuth();
@@ -46,6 +46,9 @@ export default function AppHeader() {
           <NavLink to="/leave" current={loc.pathname === "/leave"} icon={<AirplaneTilt size={16} weight="bold"/>} label="Leave" testid="nav-leave"/>
           <NavLink to="/wishes" current={loc.pathname === "/wishes"} icon={<span className="relative mr-1.5"><HandHeart size={16} weight="bold"/>{unread > 0 && <span className="absolute -top-1.5 -right-2 min-w-[14px] h-[14px] px-0.5 rounded-full bg-[#FF3B30] text-white text-[9px] font-mono grid place-items-center" data-testid="wishes-unread-badge">{unread}</span>}</span>} label="Wishes" testid="nav-wishes"/>
           <NavLink to="/profile" current={loc.pathname === "/profile"} icon={<UserCircle size={16} weight="bold"/>} label="Profile" testid="nav-profile"/>
+          {user?.role === "employee" && (
+            <NavLink to="/salary" current={loc.pathname === "/salary"} icon={<CurrencyInr size={16} weight="bold"/>} label="Salary" testid="nav-salary"/>
+          )}
         </nav>
 
         <div className="flex items-center gap-3">

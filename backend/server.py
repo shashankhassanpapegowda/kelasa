@@ -3558,6 +3558,12 @@ async def root():
     return {"message": "Kelasa API", "status": "ok"}
 
 app.include_router(api_router)
+from payroll_api import router as payroll_router, configure_payroll
+configure_payroll(
+    get_current_user=get_current_user, database=db, log_activity=log_activity,
+    push_user=spawn_user_push, put_object=put_object, get_object=get_object,
+)
+app.include_router(payroll_router)
 
 app.add_middleware(
     CORSMiddleware,
@@ -3576,6 +3582,8 @@ async def startup():
     _track(asyncio.create_task(auto_close_loop()))
     await seed_admin_password()
     await seed_leave_types()
+    from payroll_api import ensure_payroll_indexes
+    await ensure_payroll_indexes(db)
 
 @app.on_event("shutdown")
 async def shutdown_db_client():
