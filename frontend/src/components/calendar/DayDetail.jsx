@@ -3,7 +3,56 @@ import { api } from "@/lib/api";
 import { toast } from "sonner";
 import { fmtTime, fmtDuration } from "@/lib/format";
 import { STATUS } from "./CalendarGrid";
+import AuthPhoto from "@/components/AuthPhoto";
 import { Coffee, SignIn, SignOut, Warning, PencilSimple, X } from "@phosphor-icons/react";
+
+const PURGED = "Photo deleted after retention period";
+
+/** Thumbnail for one punch. The image is fetched only when this day panel is mounted. */
+const SelfieShot = ({ path, label, time, purged, empty }) => {
+  const [open, setOpen] = useState(false);
+  const slug = label.toLowerCase().replace(/\s+/g, "-");
+  return (
+    <div className="flex-1 min-w-0" data-testid={`day-photo-${slug}`}>
+      <div className="flex items-baseline justify-between mb-1 gap-2">
+        <span className="label-overline">{label}</span>
+        {time && <span className="font-mono text-[11px] text-muted-foreground">{fmtTime(time)}</span>}
+      </div>
+      {path ? (
+        <button type="button" onClick={() => setOpen(true)} className="block w-full text-left" data-testid={`day-photo-open-${slug}`} aria-label={`Enlarge ${label} selfie`}>
+          <AuthPhoto path={path} alt={`${label} selfie at ${time ? fmtTime(time) : ""}`} className="w-full aspect-[4/3] object-cover bg-black" fallback={<div className="w-full aspect-[4/3] bg-secondary"/>}/>
+        </button>
+      ) : (
+        <div className="w-full aspect-[4/3] bg-secondary grid place-items-center text-[11px] text-muted-foreground text-center px-2 leading-snug" data-testid={purged ? "day-photo-purged" : "day-photo-empty"}>
+          {purged ? PURGED : empty}
+        </div>
+      )}
+      {open && path && (
+        <div className="fixed inset-0 z-[1000] bg-black/80 backdrop-blur-sm grid place-items-center p-4" onClick={() => setOpen(false)} data-testid="day-photo-lightbox" role="dialog" aria-label={`${label} selfie`}>
+          <div className="max-w-lg w-full" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between text-white mb-2">
+              <span className="text-sm">{label}{time ? <> · <span className="font-mono">{fmtTime(time)}</span></> : null}</span>
+              <button type="button" onClick={() => setOpen(false)} className="p-2" data-testid="day-photo-lightbox-close" aria-label="Close photo"><X size={18} weight="bold"/></button>
+            </div>
+            <AuthPhoto path={path} alt={`${label} selfie`} className="w-full max-h-[80vh] object-contain bg-black" fallback={<div className="w-full aspect-[4/3] bg-secondary"/>}/>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
+const SessionPhotos = ({ s }) => {
+  const purgedIn = !!s.photos_purged_at && !s.check_in_photo_path;
+  const purgedOut = !!s.photos_purged_at && !s.check_out_photo_path && !!s.check_out;
+  if (!s.check_in_photo_path && !s.check_out_photo_path && !s.photos_purged_at) return null;
+  return (
+    <div className="flex gap-2" data-testid={`day-photos-${s.record_id}`}>
+      <SelfieShot path={s.check_in_photo_path} label="Check-in" time={s.check_in} purged={purgedIn} empty="No photo"/>
+      <SelfieShot path={s.check_out_photo_path} label="Check-out" time={s.check_out} purged={purgedOut} empty={s.check_out ? "No photo" : "Not checked out"}/>
+    </div>
+  );
+};
 
 const hhmm = (iso) => (iso ? new Date(iso).toTimeString().slice(0, 5) : "");
 
@@ -60,6 +109,7 @@ const Session = ({ s }) => (
       {s.regularized && <span className="text-[#1D4ED8]">corrected by manager</span>}
       {s.auto_closed && !s.regularized && <span className="text-[#A16207] inline-flex items-center gap-1"><Warning size={12} weight="fill"/> missed check-out — closed automatically</span>}
     </div>
+    <SessionPhotos s={s}/>
     {(s.breaks || []).length > 0 && (
       <div className="text-[11px] font-mono text-muted-foreground">
         {s.breaks.map((b, i) => <span key={i} className="mr-3">break {fmtTime(b.start)}–{b.end ? fmtTime(b.end) : "…"}</span>)}

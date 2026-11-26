@@ -31,6 +31,7 @@ import json
 import asyncio
 from pywebpush import webpush, WebPushException
 import export_job
+import selfie_retention
 from fastapi.responses import FileResponse
 from attendance_calc import shift_minutes, compute_session, session_cap, day_status, DEFAULT_WEEKLY_OFF
 
@@ -509,8 +510,6 @@ def spawn_push(employee_id: str, payload: dict):
     task = asyncio.create_task(push_to_managers_of(employee_id, payload))
     _push_tasks.add(task)
     task.add_done_callback(_push_tasks.discard)
-
-SELFIE_KEEP_DAYS = 7
 
 async def get_current_user(request: Request) -> dict:
     token = request.cookies.get("session_token")
@@ -1555,23 +1554,43 @@ async def admin_face_checks(user: dict = Depends(require_manager), flagged: bool
             "check_out_face_reviewed_by": reviewers.get(r.get("check_out_face_reviewed_by")),
             "name": u.get("name") or u.get("email"), "site": u.get("site"), "enrollment_photo_path": u.get("face_photo_path")})
     return {"items": items, "total": total, "page": page, "page_size": page_size, "pending_review": pending,
-            "keep_days": SELFIE_KEEP_DAYS}
+            "retention_months": selfie_retention.selfie_retention_months()}
 
 # ---------- Selfie retention ----------
+# Check-in and check-out selfies only. Enrolment photos (face_photo_path) and
+# avatars live on the user document and are never selected here.
 async def run_selfie_purge() -> int:
-    cutoff = (now_utc() - timedelta(days=SELFIE_KEEP_DAYS)).isoformat()
-    recs = await db.attendance.find({"check_in": {"$lt": cutoff}, "$or": [
-        {"check_in_photo_path": {"$ne": None}}, {"check_out_photo_path": {"$ne": None}}]},
-        {"_id": 0, "record_id": 1, "check_in_photo_path": 1, "check_out_photo_path": 1}).to_list(5000)
+    cutoff = selfie_retention.selfie_retention_cutoff()
+    cutoff_iso = cutoff.isoformat()
+    # Each selfie is judged by the time it was taken. A check-out that falls
+    # inside the window is kept even when the check-in on the same record is older.
+    recs = await db.attendance.find(
+        {"$or": [
+            {"check_in_photo_path": {"$ne": None}, "check_in": {"$lt": cutoff_iso}},
+            {"check_out_photo_path": {"$ne": None}, "check_out": {"$lt": cutoff_iso}},
+        ]},
+        {"_id": 0, "record_id": 1, "check_in": 1, "check_out": 1,
+         "check_in_photo_path": 1, "check_out_photo_path": 1},
+    ).to_list(5000)
+    cleared = 0
     for r in recs:
-        for k in ("check_in_photo_path", "check_out_photo_path"):
-            if r.get(k):
-                await asyncio.to_thread(scrub_object, r[k])
-        await db.attendance.update_one({"record_id": r["record_id"]}, {"$set": {
-            "check_in_photo_path": None, "check_out_photo_path": None, "photos_purged_at": now_utc().isoformat()}})
-    if recs:
-        logger.info(f"Selfie purge: cleared photos on {len(recs)} attendance records")
-    return len(recs)
+        updates = {}
+        for kind in ("check_in", "check_out"):
+            path_key = f"{kind}_photo_path"
+            path = r.get(path_key)
+            if path and selfie_retention.photo_taken_before(r.get(kind), cutoff):
+                await asyncio.to_thread(scrub_object, path)
+                updates[path_key] = None
+        if not updates:
+            # The query can over-select on odd timestamp strings. Do not scrub
+            # a photo whose real timestamp is still inside the window.
+            continue
+        updates["photos_purged_at"] = now_utc().isoformat()
+        await db.attendance.update_one({"record_id": r["record_id"]}, {"$set": updates})
+        cleared += 1
+    if cleared:
+        logger.info(f"Selfie purge: cleared photos on {cleared} attendance records (before {cutoff_iso})")
+    return cleared
 
 @api_router.post("/cron/selfie-purge")
 async def cron_selfie_purge(request: Request):
@@ -3298,7 +3317,8 @@ def _month_bounds(month: str):
 
 SESSION_KEYS = ("record_id", "check_in", "check_out", "net_work_minutes", "duration_minutes", "total_break_minutes",
                 "breaks", "late_by_minutes", "auto_closed", "auto_close_reason", "over_cap", "over_break", "regularized",
-                "check_in_branch", "check_out_branch", "status")
+                "check_in_branch", "check_out_branch", "status",
+                "check_in_photo_path", "check_out_photo_path", "photos_purged_at")
 
 async def build_calendar(u: dict, month: str) -> dict:
     await auto_close_stale_sessions()

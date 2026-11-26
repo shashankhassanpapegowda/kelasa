@@ -5,6 +5,13 @@ import AuthPhoto from "@/components/AuthPhoto";
 import { fmtTime } from "@/lib/format";
 import { Camera, CaretLeft, CaretRight } from "@phosphor-icons/react";
 
+const retentionLine = (months) => {
+  const n = Number.isFinite(Number(months)) ? Number(months) : 1;
+  if (n <= 0) return "Check-in and check-out selfies are kept for the current calendar month, then deleted.";
+  if (n === 1) return "Check-in and check-out selfies are kept for the current and previous calendar month, then deleted.";
+  return `Check-in and check-out selfies are kept for the current month and the previous ${n} calendar months, then deleted.`;
+};
+
 const Shot = ({ path, label, time, purged }) => (
   <div className="flex-1 min-w-0">
     <div className="flex items-baseline justify-between mb-1">
@@ -15,14 +22,14 @@ const Shot = ({ path, label, time, purged }) => (
       <AuthPhoto path={path} className="w-full aspect-[4/3] object-cover bg-black" fallback={<div className="w-full aspect-[4/3] bg-secondary"/>}/>
     ) : (
       <div className="w-full aspect-[4/3] bg-secondary grid place-items-center text-[11px] text-muted-foreground text-center px-2">
-        {purged ? "Deleted after 7 days" : time ? "No photo" : "Not checked out"}
+        {purged && time ? "Photo deleted after retention period" : time ? "No photo" : "Not checked out"}
       </div>
     )}
   </div>
 );
 
 export default function SelfiesTab() {
-  const [data, setData] = useState({ items: [], total: 0, page: 1, page_size: 24, keep_days: 7 });
+  const [data, setData] = useState({ items: [], total: 0, page: 1, page_size: 24, retention_months: 1 });
   const [employees, setEmployees] = useState([]);
   const [f, setF] = useState({ person: "", from: "", to: "", page: 1 });
 
@@ -70,7 +77,7 @@ export default function SelfiesTab() {
         {data.items.length === 0 && <div className="col-span-full p-8 text-center text-sm text-muted-foreground">No selfies in this range.</div>}
       </div>
       <div className="p-3 border-t border-border flex items-center justify-between text-xs text-muted-foreground">
-        <span>Check-in and check-out selfies are deleted after {data.keep_days} days.</span>
+        <span>{retentionLine(data.retention_months)}</span>
         <span className="inline-flex items-center gap-2">
           <button disabled={f.page <= 1} onClick={() => setF({ ...f, page: f.page - 1 })} data-testid="selfies-prev" className="p-1 disabled:opacity-30"><CaretLeft size={14}/></button>
           <span className="font-mono" data-testid="selfies-page">{f.page} / {pages}</span>

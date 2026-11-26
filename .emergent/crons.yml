@@ -23,7 +23,7 @@ crons:
     # Cron endpoints must ack 2xx immediately; enqueue/background the actual work.
     enabled: true
   - name: selfie-purge
-    description: "Daily 3am IST: clears check-in/out selfies older than 7 days"
+    description: "Daily 3am IST: clears check-in/out selfies taken before the retention window (the current Asia/Kolkata month plus SELFIE_RETENTION_MONTHS previous months, default 1). Enrolment photos and avatars are kept."
     cron: "0 3 * * *"
     timezone: "Asia/Kolkata"
     endpoint: "{{BASE_URL}}/api/cron/selfie-purge"
