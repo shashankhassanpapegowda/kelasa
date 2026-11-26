@@ -182,6 +182,15 @@ class EmployeeCreate(BaseModel):
     shift_start: Optional[str] = None
     shift_end: Optional[str] = None
     break_max_minutes: Optional[int] = 60
+    # Captured with the employee, not afterwards.
+    uan: Optional[str] = None
+    epf_not_applicable: bool = False
+    esi: Optional[str] = None
+    esi_not_applicable: bool = False
+    account_holder: Optional[str] = None
+    account_number: Optional[str] = None
+    ifsc: Optional[str] = None
+    bank_name: Optional[str] = None
 
 class AssignmentUpdate(BaseModel):
     name: Optional[str] = None
@@ -1750,8 +1759,12 @@ async def admin_create_employee(payload: EmployeeCreate, user: dict = Depends(re
     if payload.password:
         doc["password_hash"] = hash_password(validate_password(payload.password))
         doc["must_change_password"] = True
+    payroll = payroll_profile_for_new_employee(payload, user_local_today(user))
     await db.users.insert_one(doc)
-    await log_activity(user, "employee_added", doc["name"], email)
+    await db.employee_profiles.insert_one({
+        "user_id": user_id, "updated_at": now_utc().isoformat(), **payroll,
+    })
+    await log_activity(user, "employee_added", doc["name"], f"{email} · PF, ESI and bank account saved with the employee")
     return {"ok": True, "employee": {k: v for k, v in doc.items() if k not in ("_id", "face_descriptor", "password_hash")}}
 
 @api_router.patch("/admin/employees/{user_id}/password")
@@ -2764,6 +2777,35 @@ def clean_profile(payload: ProfileUpdate, today_iso: str) -> dict:
     if out.get("uan"):
         out["epf_not_applicable"] = False
     return out
+
+def payroll_profile_for_new_employee(payload: EmployeeCreate, today_iso: str) -> dict:
+    """PF (UAN), ESI and bank account are part of adding an employee."""
+    statutory = clean_profile(ProfileUpdate(
+        uan=payload.uan, esi=payload.esi,
+        epf_not_applicable=payload.epf_not_applicable,
+        esi_not_applicable=payload.esi_not_applicable,
+    ), today_iso)
+    if payload.epf_not_applicable:
+        statutory["uan"] = None
+        statutory["epf_not_applicable"] = True
+    elif not statutory.get("uan"):
+        raise HTTPException(status_code=400, detail="Enter the PF UAN, or mark PF as not applicable")
+    if payload.esi_not_applicable:
+        statutory["esi"] = None
+        statutory["esi_not_applicable"] = True
+    elif not statutory.get("esi"):
+        raise HTTPException(status_code=400, detail="Enter the ESI number, or mark ESI as not applicable")
+    holder = (payload.account_holder or payload.name or "").strip()
+    if not (payload.bank_name or "").strip():
+        raise HTTPException(status_code=400, detail="Bank name is required")
+    bank = clean_bank(BankDetailsIn(
+        account_holder=holder,
+        account_number=payload.account_number or "",
+        ifsc=payload.ifsc or "",
+        bank_name=payload.bank_name,
+    ))
+    return {**statutory, "bank": bank}
+
 
 def clean_bank(payload: BankDetailsIn) -> dict:
     number = re.sub(r"\s", "", payload.account_number)

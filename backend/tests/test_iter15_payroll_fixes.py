@@ -17,7 +17,9 @@ CREATED_USERS, CREATED_RECS, CREATED_LEAVES, CREATED_HOLS, CREATED_SESS = [], []
 
 def mk_user(shift=None, pending=False, joined_days_ago=30, dept="TEST_Dept15", site="TEST_Site15"):
     tag = uuid.uuid4().hex[:6]
-    body = {"name": f"TEST_Emp15_{tag}", "email": f"test_emp15_{tag}@example.com", "department": dept, "site": site}
+    body = {"name": f"TEST_Emp15_{tag}", "email": f"test_emp15_{tag}@example.com", "department": dept, "site": site,
+            "uan": "100200300401", "esi": "1234567890", "account_holder": "Test Employee",
+            "account_number": "123456789012", "ifsc": "SBIN0001234", "bank_name": "State Bank of India"}
     if shift:
         body.update(shift_start=shift[0], shift_end=shift[1])
     r = requests.post(f"{BASE_URL}/api/admin/employees", json=body, headers=ADMIN)

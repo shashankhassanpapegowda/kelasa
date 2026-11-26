@@ -9,7 +9,8 @@ made = []
 try:
     # 1. sub-admin resetting an ADMIN in their department
     em = f"test_adm_{uuid.uuid4().hex[:5]}@gtgroups.local"; made.append(em)
-    r = requests.post(f"{B}/admin/employees", headers=A, json={"name": "TEST_ScopeAdmin", "email": em, "role": "admin", "department": "Field Operations", "password": "AdminTmp@1"})
+    pay = {"uan": "100200300401", "esi": "1234567890", "account_holder": "Test", "account_number": "123456789012", "ifsc": "SBIN0001234", "bank_name": "State Bank of India"}
+    r = requests.post(f"{B}/admin/employees", headers=A, json={"name": "TEST_ScopeAdmin", "email": em, "role": "admin", "department": "Field Operations", "password": "AdminTmp@1", **pay})
     uid = r.json()["employee"]["user_id"]
     r = requests.patch(f"{B}/admin/employees/{uid}/password", headers=S, json={"password": "Hijack@123"})
     print("1. sub-admin sets admin password:", r.status_code, r.text[:100])
@@ -18,7 +19,7 @@ try:
 
     # 2. must_change_password enforced server-side?
     em2 = f"test_mcp_{uuid.uuid4().hex[:5]}@gtgroups.local"; made.append(em2)
-    requests.post(f"{B}/admin/employees", headers=A, json={"name": "TEST_MCP", "email": em2, "password": "TempPass@1"})
+    requests.post(f"{B}/admin/employees", headers=A, json={"name": "TEST_MCP", "email": em2, "password": "TempPass@1", **pay})
     tok = requests.post(f"{B}/auth/login", json={"email": em2, "password": "TempPass@1"}).json()["session_token"]
     h = {"Authorization": f"Bearer {tok}"}
     for p in ("/leave/balances", "/leave/my", "/attendance/today", "/announcements"):
