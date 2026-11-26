@@ -199,3 +199,12 @@ Employee attendance and route-tracking app, now expanding into a full **employee
 
 ## 2026-11 — EPF "not applicable" box
 - Added an `epf_not_applicable` profile flag that mirrors ESI. Ticking it clears and disables the UAN; entering a UAN unticks it. It shows up in the profile nudge, the admin profile modal, the activity log and the payroll-details CSV ("Not applicable").
+
+## 2026-11 — Face recognition REMOVED; employee Calendar + attendance corrections
+- Check-in/out now needs only {lat,lng,accuracy,image_b64}, with a required selfie (require_selfie). No enrolment is needed and /enroll redirects to /dashboard. Removed: face-api, the models, FaceCapture, FaceEnroll, CameraSelfTest, /face/enroll, /face/test, /face/status and all matching code. face_profiles and the old fields stay in the DB untouched.
+- New SelfieCapture.jsx (take, retake, confirm). The Dashboard reuses the live tracker's last fix (<60s) for check-out and shows a friendlier location-timeout message.
+- New /calendar page (nav "Calendar") with a month grid or list, legend, summary, day detail (sessions, breaks, late, auto-closed, corrected), CSV download, and "Request correction". Backend: GET /api/me/calendar, /api/me/calendar.csv.
+  - Statuses: present, late, absent, leave, half_day (net < half the shift, not applied to today; or approved half-day leave), weekly_off, holiday, punch_error (auto_closed not regularized / over_cap), today, future, not_joined, no_shift.
+- Regularization: POST /api/regularizations, GET /mine, POST /{id}/cancel. Admin: GET /api/admin/regularizations, POST /{id}/decide (a note is required to reject; approval is blocked while the employee is still checked in that day). Approval rewrites the first record of the day (originals kept) and marks the other records that day superseded_by (net 0, originals kept). Push notification and activity log entries.
+- Console: a new "Corrections" tab with a pending badge. "Face Checks" became a "Selfies" gallery (GET /admin/face-checks is still used). Team has no face tags or reset.
+- Tested: iteration_19 (backend 16/16, frontend all flows). All its minor issues are fixed.

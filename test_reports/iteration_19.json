@@ -1,0 +1,43 @@
+{
+  "summary": "Iteration 19: tested selfie-only check-in/out (no face matching), the employee calendar API and /calendar page, attendance corrections (employee request, manager approve/reject), the console Corrections and Selfies tabs, and the regressions. Backend: 16/16 pytest pass. Frontend: every requested flow works end to end with a throwaway TEST_ employee: /enroll redirects to /dashboard; the selfie modal handles snap, retake and confirm for check-in and check-out; the calendar grid, legend, month nav, list view, day detail, correction form, Pending Regularization list and CSV download all work; sub-admin rejecting without a note is blocked, approving updates the calendar to Present and shows 'corrected by manager'; the Selfies gallery shows the in/out photos; the person filter and pagination work; the Face Checks tab, the NOT ENROLLED/RESET FACE controls and the 'Test my camera' card are gone. No blocking bugs. A few minor UX and code-quality items are listed below.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "apply_regularization (POST /api/admin/regularizations/{id}/decide approved)", "issue": "Only the first attendance record of the day is overwritten. If the day had 2+ sessions, the others stay, so the calendar adds their net minutes on top of the corrected full-day span (double counting), and an auto_closed/over_cap second session keeps the day as punch_error. Approving a correction for today while the employee is still checked in silently closes their live session."},
+      {"endpoint": "build_calendar", "issue": "Today is marked half_day as soon as a short session closes (e.g. a 2-minute check-in/out at noon), before the shift is over. Consider not applying the half_day rule to today until after shift end."},
+      {"endpoint": "server.py face code", "issue": "Dead face-recognition code is still there: /api/face/test, /api/face/enroll, validate_descriptors/face_score, a startup migration loop over face_descriptor, and CheckRequest.descriptors/liveness fields. Remove it to finish the cleanup. server.py is 3,692 lines and should be split."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "Dashboard check buttons", "issue": "Labels still read 'Face Check-In' / 'Face Check-Out' even though face recognition was removed. Should be 'Check In' / 'Check Out' (or 'Selfie Check-In').", "selector": "[data-testid='check-in-btn'], [data-testid='check-out-btn']", "priority": "LOW"},
+      {"component": "Dashboard startCheck -> getAccuratePosition", "issue": "While on duty the tracking watchPosition is already running, and startCheck opens a second watchPosition with maximumAge:0. In headless Chromium the second watch never fires and times out after 15s with a bare 'Timeout expired' toast, so check-out could only be tested with geolocation mocked. Likely a test-environment quirk, but it would be more robust to reuse the tracker's latest fix if it is recent and to show a friendlier error message.", "selector": "[data-testid='check-out-btn']", "priority": "LOW"}
+    ],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Calendar legend", "issues": ["'Half Day' and 'Late' dots are nearly the same orange, so they are hard to tell apart", "calendar-summary shows Worked/Present/Absent/Leave/Late but no Half Day or Punch Error counts"]},
+      {"screen": "Calendar correction form / Selfies tab", "issues": ["Uses native <input type=time>, <input type=date> and <select> instead of shadcn components (UI is inconsistent across browsers)"]},
+      {"screen": "Console tabs", "issues": ["The Corrections tab has no pending-count badge (the Leave tab has one), so managers may miss pending requests"]}
+    ]
+  },
+  "test_report_links": ["/app/backend/tests/test_iter19_selfie_calendar_regularization.py", "/app/test_reports/pytest/iter19.xml"],
+  "action_items": [
+    "Rename the 'Face Check-In/Out' button labels",
+    "apply_regularization: handle days with multiple sessions (replace or remove the extra sessions) and refuse or handle the case where today's session is still open",
+    "Optional: don't mark today half_day before shift end; add Half Day and Punch Error counts to the summary; pick a different colour for Late vs Half Day",
+    "Remove the dead face-recognition endpoints and helpers from server.py",
+    "Optional: reuse the live tracking position in startCheck while on duty and show a friendly geolocation timeout message"
+  ],
+  "critical_code_review_comments": [
+    "apply_regularization overwrites only the earliest record of the day (find_one sort check_in); the other sessions remain",
+    "Regularization approval on today's date ends a live session without warning",
+    "user_from_request (used by the CSV downloads) does not check session expires_at, unlike get_current_user (assumed; this code was already there before this iteration)",
+    "Old selfies of deleted users stay in object storage until the 7-day purge (fine)"
+  ],
+  "updated_files": ["/app/backend/tests/test_iter19_selfie_calendar_regularization.py"],
+  "success_rate": {"backend": "100% (16/16)", "frontend": "100% of requested flows (check-out needed mocked geolocation in headless)"},
+  "seed_data_creation": "Throwaway users user_TEST_<hex> (pytest fixture, auto-cleaned) and user_TEST_ui19 (UI run) were created directly in Mongo with sessions. All of their attendance, locations, regularizations, sessions and activity_log entries were deleted. Ravi's data and reg_8e670b4e7e were not touched.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Geofence is off (no branches), so any lat/lng works. Ravi's approved correction on 2026-11-18 is in place. To test check-out in Playwright while on duty, mock navigator.geolocation in add_init_script (the real emulated geolocation times out on the second watchPosition). Mock the camera by overriding getUserMedia with canvas.captureStream(). Late has a 15-minute grace (09:30 in -> 15 min late)."
+}

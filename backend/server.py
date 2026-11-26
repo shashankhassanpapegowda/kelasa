@@ -110,23 +110,11 @@ def get_object(path: str):
     return resp.content, resp.headers.get("Content-Type", "image/jpeg")
 
 # ---------- Models ----------
-class FaceEnrollRequest(BaseModel):
-    descriptors: List[List[float]]
-    image_b64: str
-
-class Liveness(BaseModel):
-    challenge: Literal["blink", "turn"]
-    passed: bool
-    duration_ms: Optional[int] = None
-    low_light: Optional[bool] = None
-
 class CheckRequest(BaseModel):
     lat: float
     lng: float
     accuracy: Optional[float] = None
     image_b64: str
-    descriptors: Optional[List[List[float]]] = None
-    liveness: Optional[Liveness] = None
 
 class RegularizationIn(BaseModel):
     date: str
@@ -136,11 +124,6 @@ class RegularizationIn(BaseModel):
 
 class RegularizationDecision(BaseModel):
     decision: Literal["approved", "rejected"]
-    note: Optional[str] = None
-
-class FaceReviewIn(BaseModel):
-    kind: Literal["in", "out"]
-    decision: Literal["ok", "mismatch"]
     note: Optional[str] = None
 
 class LocationPing(BaseModel):
@@ -516,78 +499,7 @@ def spawn_push(employee_id: str, payload: dict):
     _push_tasks.add(task)
     task.add_done_callback(_push_tasks.discard)
 
-def euclidean(a: List[float], b: List[float]) -> float:
-    if len(a) != len(b):
-        return 9999.0
-    return math.sqrt(sum((x - y) ** 2 for x, y in zip(a, b)))
-
-FACE_MATCH_THRESHOLD = float(os.environ.get("FACE_MATCH_THRESHOLD", "0.55"))
-FACE_CLEAN = 0.45      # at or below: confident match
-FACE_LEARN = 0.40      # at or below (and live): add this capture to the person's learned faces
-FACE_SAME_PERSON = 0.6 # max spread between frames of one capture
-FACE_LEARNED_KEEP = 10
 SELFIE_KEEP_DAYS = 7
-
-def mean_descriptor(ds: List[List[float]]) -> List[float]:
-    return [sum(c) / len(ds) for c in zip(*ds)]
-
-def face_score(desc: List[float], templates: List[List[float]]) -> float:
-    ds = sorted(euclidean(desc, t) for t in templates)
-    if not ds:
-        return 9999.0
-    return ds[0] if len(ds) == 1 else (ds[0] + ds[1]) / 2
-
-def validate_descriptors(ds: List[List[float]], min_count: int) -> List[float]:
-    if len(ds) < min_count or len(ds) > 6 or any(len(d) != 128 or not all(math.isfinite(x) for x in d) for d in ds):
-        raise HTTPException(status_code=400, detail="Invalid face data. Please refresh the app and try again.")
-    if max((euclidean(a, b) for i, a in enumerate(ds) for b in ds[i + 1:]), default=0) > FACE_SAME_PERSON:
-        raise HTTPException(status_code=400, detail="The face changed during the check. Keep only your face in the frame and try again.")
-    return mean_descriptor(ds)
-
-async def face_templates_of(user_id: str, legacy: Optional[List[float]] = None) -> List[List[float]]:
-    prof = await db.face_profiles.find_one({"user_id": user_id}, {"_id": 0})
-    if prof:
-        return (prof.get("templates") or []) + (prof.get("learned") or [])
-    return [legacy] if legacy else []
-
-async def closest_other(user_id: str, desc: List[float]) -> tuple:
-    best, best_uid = 9999.0, None
-    async for prof in db.face_profiles.find({"user_id": {"$ne": user_id}}, {"_id": 0}):
-        sc = face_score(desc, (prof.get("templates") or []) + (prof.get("learned") or []))
-        if sc < best:
-            best, best_uid = sc, prof["user_id"]
-    return best, best_uid
-
-async def verify_face(user: dict, payload: "CheckRequest") -> dict:
-    if not user.get("face_enrolled"):
-        raise HTTPException(status_code=400, detail="Face not enrolled. Please complete face enrollment first.")
-    if not payload.liveness or not payload.liveness.passed:
-        raise HTTPException(status_code=400, detail="Live check missing. Please refresh the app and try again.")
-    desc = validate_descriptors(payload.descriptors, 2)
-    score = face_score(desc, await face_templates_of(user["user_id"], user.get("face_descriptor")))
-    if score > FACE_MATCH_THRESHOLD:
-        raise HTTPException(status_code=403, detail="Face doesn't match. Face a light, remove helmet or mask, hold the phone at eye level and try again.")
-    other, other_uid = await closest_other(user["user_id"], desc)
-    if other < score and other <= FACE_CLEAN:
-        await log_activity(user, "face_blocked", user.get("name") or user["user_id"], f"looked like another employee ({other_uid})")
-        raise HTTPException(status_code=403, detail="This face looks like a different employee. Each person must check in with their own face.")
-    reasons = []
-    if score > FACE_CLEAN:
-        reasons.append("borderline match")
-    if other <= FACE_MATCH_THRESHOLD and other - score < 0.08:
-        reasons.append("close to another employee")
-    return {"desc": desc, "score": round(score, 4), "flagged": bool(reasons), "reason": ", ".join(reasons) or None,
-            "challenge": payload.liveness.challenge, "low_light": bool(payload.liveness.low_light)}
-
-async def learn_face(user_id: str, check: dict):
-    if check["score"] <= FACE_LEARN and not check["flagged"]:
-        await db.face_profiles.update_one({"user_id": user_id},
-                                          {"$push": {"learned": {"$each": [check["desc"]], "$slice": -FACE_LEARNED_KEEP}}})
-
-def face_fields(prefix: str, check: dict) -> dict:
-    return {f"{prefix}_face_distance": check["score"], f"{prefix}_face_review": check["flagged"],
-            f"{prefix}_face_review_reason": check["reason"], f"{prefix}_liveness": check["challenge"],
-            f"{prefix}_low_light": check["low_light"]}
 
 async def get_current_user(request: Request) -> dict:
     token = request.cookies.get("session_token")
@@ -1011,61 +923,6 @@ async def ensure_indexes():
     await db.password_reset_tokens.create_index("expires_at", expireAfterSeconds=0)
     await db.password_reset_tokens.create_index("token", unique=True)
     await db.login_attempts.create_index("identifier", unique=True)
-
-# ---------- Face ----------
-async def migrate_face_profiles():
-    await db.face_profiles.create_index("user_id", unique=True)
-    n = 0
-    async for u in db.users.find({"face_enrolled": True, "face_descriptor": {"$ne": None}}, {"_id": 0, "user_id": 1, "face_descriptor": 1}):
-        res = await db.face_profiles.update_one({"user_id": u["user_id"]}, {"$setOnInsert": {
-            "templates": [u["face_descriptor"]], "learned": [], "migrated": True, "updated_at": now_utc().isoformat()}}, upsert=True)
-        n += 1 if res.upserted_id else 0
-    if n:
-        logger.info(f"Face profiles migrated for {n} users")
-
-class FaceTestIn(BaseModel):
-    descriptors: List[List[float]]
-    liveness: Optional[Liveness] = None
-
-@api_router.post("/face/test")
-async def face_test(payload: FaceTestIn, user: dict = Depends(get_current_user)):
-    """Dry run of the check-in face check: nothing is saved or learned."""
-    check = await verify_face(user, payload)
-    quality = "strong" if check["score"] <= FACE_LEARN else "good" if check["score"] <= FACE_CLEAN else "borderline"
-    return {"ok": True, "quality": quality, "score": check["score"], "flagged": check["flagged"], "low_light": check["low_light"]}
-
-@api_router.post("/face/enroll")
-async def face_enroll(payload: FaceEnrollRequest, user: dict = Depends(get_current_user)):
-    if user.get("face_enrolled"):
-        raise HTTPException(status_code=403, detail="Your face is already enrolled. Ask your manager to reset it first.")
-    if len(payload.descriptors) < 3:
-        raise HTTPException(status_code=400, detail="Enrolment needs 3 photos. Please refresh the app and try again.")
-    for d in payload.descriptors:
-        validate_descriptors([d], 1)
-    if max(euclidean(a, b) for i, a in enumerate(payload.descriptors) for b in payload.descriptors[i + 1:]) > FACE_SAME_PERSON:
-        raise HTTPException(status_code=400, detail="The 3 photos don't look like the same person. Keep only your face in the frame and try again.")
-    other, other_uid = await closest_other(user["user_id"], mean_descriptor(payload.descriptors))
-    if other <= FACE_LEARN:
-        await log_activity(user, "face_enroll_blocked", user.get("name") or user["user_id"], f"matched another employee ({other_uid})")
-        raise HTTPException(status_code=409, detail="This face is already enrolled for another employee. Ask your manager for help.")
-    photo_path = upload_face_image(user["user_id"], payload.image_b64, "enrollment")
-    await db.face_profiles.update_one({"user_id": user["user_id"]}, {"$set": {
-        "templates": payload.descriptors, "learned": [], "updated_at": now_utc().isoformat()}}, upsert=True)
-    await db.users.update_one(
-        {"user_id": user["user_id"]},
-        {"$set": {
-            "face_enrolled": True,
-            "face_descriptor": mean_descriptor(payload.descriptors),
-            "face_photo_path": photo_path,
-            "face_enrolled_at": now_utc().isoformat(),
-            "face_template_count": len(payload.descriptors),
-        }}
-    )
-    return {"ok": True, "photo_path": photo_path}
-
-@api_router.get("/face/status")
-async def face_status(user: dict = Depends(get_current_user)):
-    return {"enrolled": user.get("face_enrolled", False)}
 
 # ---------- File Serving ----------
 @api_router.get("/files/{path:path}")
@@ -1688,21 +1545,6 @@ async def admin_face_checks(user: dict = Depends(require_manager), flagged: bool
             "name": u.get("name") or u.get("email"), "site": u.get("site"), "enrollment_photo_path": u.get("face_photo_path")})
     return {"items": items, "total": total, "page": page, "page_size": page_size, "pending_review": pending,
             "keep_days": SELFIE_KEEP_DAYS}
-
-@api_router.post("/admin/face-checks/{record_id}")
-async def admin_face_review(record_id: str, payload: FaceReviewIn, user: dict = Depends(require_manager)):
-    rec = await db.attendance.find_one({"record_id": record_id}, {"_id": 0, "user_id": 1, "date": 1})
-    if not rec:
-        raise HTTPException(status_code=404, detail="Not found")
-    await ensure_in_scope(user, rec["user_id"])
-    pre = f"check_{payload.kind}"
-    await db.attendance.update_one({"record_id": record_id}, {"$set": {
-        f"{pre}_face_review_status": payload.decision, f"{pre}_face_reviewed_by": user["user_id"],
-        f"{pre}_face_reviewed_at": now_utc().isoformat(), f"{pre}_face_review_note": (payload.note or "").strip() or None}})
-    emp = await db.users.find_one({"user_id": rec["user_id"]}, {"_id": 0, "name": 1})
-    await log_activity(user, "face_review_ok" if payload.decision == "ok" else "face_review_mismatch",
-                       (emp or {}).get("name") or rec["user_id"], f"{rec['date']} check-{payload.kind}" + (f" · {payload.note.strip()}" if (payload.note or "").strip() else ""))
-    return {"ok": True}
 
 # ---------- Selfie retention ----------
 async def run_selfie_purge() -> int:
@@ -3421,7 +3263,8 @@ async def build_calendar(u: dict, month: str) -> dict:
     recs = await db.attendance.find({"user_id": uid, "date": {"$gte": f, "$lte": t}}, {"_id": 0}).sort("check_in", 1).to_list(2000)
     by_date: dict = {}
     for r in recs:
-        by_date.setdefault(r["date"], []).append({k: r.get(k) for k in SESSION_KEYS})
+        if not r.get("superseded_by"):
+            by_date.setdefault(r["date"], []).append({k: r.get(k) for k in SESSION_KEYS})
     hols = {h["date"]: h["name"] for h in await db.holidays.find(
         {"date": {"$gte": f, "$lte": t}, **holiday_scope(u.get("site"))}, {"_id": 0, "date": 1, "name": 1}).to_list(200)}
     leave_by_date: dict = {}
@@ -3452,7 +3295,7 @@ async def build_calendar(u: dict, month: str) -> dict:
                             pending_invite=bool(u.get("pending_invite")))
         if sess and any((x.get("auto_closed") and not x.get("regularized")) or x.get("over_cap") for x in sess):
             status = "punch_error"
-        elif sess and not open_now and half and net < half:
+        elif sess and not open_now and half and net < half and cur != today_d:
             status = "half_day"
         elif lv and lv.get("half_day"):
             status = "half_day"
@@ -3547,8 +3390,9 @@ async def admin_regularizations(status: Optional[str] = "pending", user: dict = 
 async def apply_regularization(reg: dict, emp: dict):
     tz = emp.get("timezone") or DEFAULT_TZ
     cin, cout = _local_iso(reg["date"], reg["check_in"], tz), _local_iso(reg["date"], reg["check_out"], tz)
-    rec = await db.attendance.find_one({"user_id": emp["user_id"], "date": reg["date"]}, {"_id": 0}, sort=[("check_in", 1)])
-    breaks = int((rec or {}).get("total_break_minutes") or 0)
+    day_recs = await db.attendance.find({"user_id": emp["user_id"], "date": reg["date"]}, {"_id": 0}).sort("check_in", 1).to_list(50)
+    rec = day_recs[0] if day_recs else None
+    breaks = sum(int(r.get("total_break_minutes") or 0) for r in day_recs)
     calc = compute_session(cin, cout, breaks, emp.get("shift_start"), emp.get("shift_end"))
     fields = {"check_in": cin, "check_out": cout, "status": "off_duty", "on_break": False, "auto_closed": False,
               "auto_close_reason": None, "regularized": True, "regularization_id": reg["request_id"],
@@ -3561,6 +3405,13 @@ async def apply_regularization(reg: dict, emp: dict):
     else:
         await db.attendance.insert_one({"record_id": f"att_{uuid.uuid4().hex[:12]}", "user_id": emp["user_id"], "date": reg["date"],
                                         "breaks": [], "total_break_minutes": 0, "check_in_branch": None, **fields})
+    # The corrected span covers the whole day, so other sessions that day stop counting (originals are kept).
+    for r in day_recs[1:]:
+        keep = {} if r.get("superseded_by") else {"original_net_work_minutes": r.get("net_work_minutes"),
+                                                 "original_auto_closed": r.get("auto_closed"), "original_over_cap": r.get("over_cap")}
+        await db.attendance.update_one({"record_id": r["record_id"]}, {"$set": {
+            **keep, "superseded_by": reg["request_id"], "net_work_minutes": 0, "overtime_minutes": 0,
+            "auto_closed": False, "over_cap": False, "late_by_minutes": 0}})
 
 @api_router.post("/admin/regularizations/{request_id}/decide")
 async def decide_regularization(request_id: str, payload: RegularizationDecision, user: dict = Depends(require_manager)):
@@ -3571,6 +3422,8 @@ async def decide_regularization(request_id: str, payload: RegularizationDecision
     note = (payload.note or "").strip()
     if payload.decision == "rejected" and not note:
         raise HTTPException(status_code=400, detail="Add a note explaining why it was rejected")
+    if payload.decision == "approved" and await db.attendance.find_one({"user_id": reg["user_id"], "date": reg["date"], "check_out": None}):
+        raise HTTPException(status_code=400, detail="This employee is still checked in for that day. Approve after they check out.")
     res = await db.regularizations.update_one({"request_id": request_id, "status": "pending"}, {"$set": {
         "status": payload.decision, "manager_note": note or None, "decided_by": user["user_id"], "decided_at": now_utc().isoformat()}})
     if not res.modified_count:
@@ -3680,7 +3533,6 @@ async def startup():
     init_storage()
     await ensure_indexes()
     await recalc_attendance_migration()
-    await migrate_face_profiles()
     _track(asyncio.create_task(run_selfie_purge()))
     _track(asyncio.create_task(auto_close_loop()))
     await seed_admin_password()

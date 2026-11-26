@@ -10,7 +10,7 @@ const STATUS_CLS = {
 
 const fmtDay = (d) => new Date(`${d}T00:00:00`).toLocaleDateString([], { weekday: "short", day: "2-digit", month: "short", year: "numeric" });
 
-export default function CorrectionsTab() {
+export default function CorrectionsTab({ onChange }) {
   const [status, setStatus] = useState("pending");
   const [items, setItems] = useState([]);
   const [notes, setNotes] = useState({});
@@ -24,7 +24,7 @@ export default function CorrectionsTab() {
     try {
       await api.post(`/admin/regularizations/${r.request_id}/decide`, { decision, note: notes[r.request_id] || "" });
       toast.success(decision === "approved" ? `Approved — ${r.name}'s attendance was updated` : "Rejected");
-      load();
+      load(); onChange?.();
     } catch (e) { toast.error(e?.response?.data?.detail || "Could not save"); }
     finally { setBusy(null); }
   };

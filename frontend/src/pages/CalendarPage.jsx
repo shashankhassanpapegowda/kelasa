@@ -110,9 +110,9 @@ export default function CalendarPage() {
               <div className="border-t border-border pt-4"><Legend/></div>
             </section>
             {cal && (
-              <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 text-center" data-testid="calendar-summary">
+              <div className="grid grid-cols-3 sm:grid-cols-7 gap-2 text-center" data-testid="calendar-summary">
                 {[["Worked", fmtDuration(cal.total_work_minutes)], ["Present", (c.present || 0) + (c.late || 0) + (c.half_day || 0) + (c.punch_error || 0)],
-                  ["Absent", c.absent || 0], ["Leave", c.leave || 0], ["Late", c.late || 0]].map(([k, v]) => (
+                  ["Absent", c.absent || 0], ["Leave", c.leave || 0], ["Late", c.late || 0], ["Half Day", c.half_day || 0], ["Punch Error", c.punch_error || 0]].map(([k, v]) => (
                   <div key={k} className="bg-card border border-border rounded-lg p-3">
                     <div className="text-lg font-semibold font-mono">{v}</div>
                     <div className="text-[11px] text-muted-foreground uppercase tracking-wide">{k}</div>

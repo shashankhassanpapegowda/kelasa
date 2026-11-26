@@ -4,7 +4,7 @@ export const STATUS = {
   present: { label: "Present", cell: "bg-[#E7F7EE] text-[#15803D]", dot: "bg-[#16A34A]" },
   absent: { label: "Absent", cell: "bg-[#FDE4E4] text-[#DC2626]", dot: "bg-[#DC2626]" },
   leave: { label: "On leave", cell: "bg-[#F0E9FF] text-[#7C3AED]", dot: "bg-[#8B5CF6]" },
-  half_day: { label: "Half Day", cell: "bg-[#FEF3C7] text-[#B45309]", dot: "bg-[#D97706]" },
+  half_day: { label: "Half Day", cell: "bg-[#FCE7F3] text-[#BE185D]", dot: "bg-[#EC4899]" },
   weekly_off: { label: "Week Off", cell: "bg-[#E5E7EB] text-[#4B5563]", dot: "bg-[#4B5563]" },
   holiday: { label: "Holiday", cell: "bg-[#DDF4F6] text-[#0E7490]", dot: "bg-[#0891B2]" },
   late: { label: "Late", cell: "bg-[#FFEDD5] text-[#C2410C]", dot: "bg-[#F97316]" },

@@ -13,6 +13,7 @@ class TestSmokeAndAuth:
         r = anon_client.get(f"{base_url}/api/auth/me")
         assert r.status_code == 401
 
+    @pytest.mark.skip(reason="face recognition removed")
     def test_face_status_no_auth(self, anon_client, base_url):
         r = anon_client.get(f"{base_url}/api/face/status")
         assert r.status_code == 401
@@ -62,6 +63,7 @@ class TestAdminEndpoints:
 
 
 # ---------- Face Enrollment ----------
+@pytest.mark.skip(reason="face recognition removed")
 class TestFaceEnrollment:
     def test_face_status_unenrolled(self, unenrolled_client, base_url):
         r = unenrolled_client.get(f"{base_url}/api/face/status")
@@ -125,6 +127,7 @@ class TestFaceEnrollment:
 
 # ---------- Attendance Flow (face + accuracy) ----------
 class TestAttendanceFlow:
+    @pytest.mark.skip(reason="face recognition removed")
     def test_checkin_without_face_enrollment(self, unenrolled_client, base_url, tiny_jpeg_b64, mongo_db):
         # reset face status (in case prior test enrolled)
         mongo_db.users.update_one({"user_id": "TEST_user_emp_noface"},
@@ -152,7 +155,6 @@ class TestAttendanceFlow:
         body = r.json()
         assert body["ok"] is True
         assert "record_id" in body
-        assert body["face_distance"] == 0.0
         record_id = body["record_id"]
 
         # Confirm photo path persisted in DB
@@ -202,6 +204,7 @@ class TestAttendanceFlow:
         assert rec2["check_out_accuracy"] == 20
         assert rec2["check_out"] is not None
 
+    @pytest.mark.skip(reason="face recognition removed")
     def test_checkin_mismatched_descriptor(self, employee_client, base_url, mongo_db,
                                             tiny_jpeg_b64):
         mongo_db.attendance.delete_many({"user_id": "TEST_user_emp01"})

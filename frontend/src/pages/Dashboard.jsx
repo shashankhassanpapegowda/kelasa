@@ -71,6 +71,7 @@ export default function Dashboard() {
   const tickTimer = useRef(null);
   const liveStopRef = useRef(null);
   const lastPingAtRef = useRef(0);
+  const lastFixRef = useRef(null);
 
 
   const refresh = async () => {
@@ -120,6 +121,7 @@ export default function Dashboard() {
       // start LIVE watcher — pushes ping at most every PING_INTERVAL_MS
       liveStopRef.current = startLiveWatch(async (p) => {
         setLivePos(p);
+        lastFixRef.current = { ...p, at: Date.now() };
         const now = Date.now();
         if (now - lastPingAtRef.current < PING_INTERVAL_MS) return;
         lastPingAtRef.current = now;
@@ -143,7 +145,9 @@ export default function Dashboard() {
   const startCheck = async (mode) => {
     setBusy(true);
     try {
-      const g = await getAccuratePosition({ desiredAccuracy: 30, fallbackAccuracy: 150, maxWait: 15000 });
+      const recent = lastFixRef.current;
+      const g = recent && Date.now() - recent.at < 60000 && (recent.accuracy ?? 999) <= 150
+        ? recent : await getAccuratePosition({ desiredAccuracy: 30, fallbackAccuracy: 150, maxWait: 15000 });
       if (g.accuracy > 200) {
         toast.warning(`Low GPS accuracy (±${Math.round(g.accuracy)}m). Move outside / enable Precise Location.`);
       }
@@ -157,7 +161,7 @@ export default function Dashboard() {
       setFaceMode(mode);
       setFaceOpen(true);
     } catch (e) {
-      toast.error(e?.message || "Could not get your location.");
+      toast.error(/timeout/i.test(e?.message || "") ? "Couldn't get your location in time. Step outside or turn on Precise Location, then try again." : (e?.message || "Could not get your location."));
     } finally {
       setBusy(false);
     }
@@ -282,14 +286,14 @@ export default function Dashboard() {
                   <button onClick={() => startCheck("in")} disabled={busy} data-testid="check-in-btn"
                     className="bg-foreground text-background px-6 py-4 inline-flex items-center gap-3 hover:bg-primary disabled:opacity-50 transition-colors">
                     <Camera size={18} weight="bold"/>
-                    <span className="font-medium">Face Check-In</span>
+                    <span className="font-medium">Check In</span>
                   </button>
                 ) : (
                   <>
                     <button onClick={() => startCheck("out")} disabled={busy || onBreak} data-testid="check-out-btn"
                       className="bg-[#FF3B30] text-white px-6 py-4 inline-flex items-center gap-3 hover:bg-[#d93128] disabled:opacity-50 transition-colors">
                       <Camera size={18} weight="bold"/>
-                      <span className="font-medium">Face Check-Out</span>
+                      <span className="font-medium">Check Out</span>
                     </button>
                     {!onBreak ? (
                       <button onClick={() => handleBreak("start")} disabled={busy} data-testid="break-start-btn"

@@ -37,10 +37,14 @@ export default function AdminPanel() {
   const isAdmin = user?.role === "admin";
   const [tab, setTab] = useState(() => window.location.hash.replace("#", "") || "overview");
   const [pendingLeave, setPendingLeave] = useState(0);
+  const [pendingFix, setPendingFix] = useState(0);
 
   const refreshPending = () => {
     api.get("/admin/leave?status=pending")
       .then(r => setPendingLeave(r.data.pending_count || 0))
+      .catch(() => {});
+    api.get("/admin/regularizations?status=pending")
+      .then(r => setPendingFix((r.data.items || []).length))
       .catch(() => {});
   };
 
@@ -97,6 +101,9 @@ export default function AdminPanel() {
                   className={`relative flex items-center gap-2 px-4 py-3 text-xs uppercase tracking-[0.15em] whitespace-nowrap border-b-2 transition-colors ${active ? "border-foreground text-foreground" : "border-transparent text-muted-foreground hover:text-foreground"}`}>
                   <Icon size={15} weight="bold"/>
                   {t.label}
+                  {t.id === "corrections" && pendingFix > 0 && (
+                    <span className="ml-1 bg-[#FF3B30] text-white text-[9px] font-mono px-1.5 py-0.5" data-testid="corrections-pending-badge">{pendingFix}</span>
+                  )}
                   {t.id === "leave" && pendingLeave > 0 && (
                     <span className="ml-1 bg-[#FF3B30] text-white text-[9px] font-mono px-1.5 py-0.5" data-testid="leave-pending-badge">{pendingLeave}</span>
                   )}
@@ -114,7 +121,7 @@ export default function AdminPanel() {
             {tab === "notices" && <NoticesTab/>}
             {tab === "branches" && isAdmin && <BranchesTab/>}
             {tab === "alerts" && <AlertsTab/>}
-            {tab === "corrections" && <CorrectionsTab/>}
+            {tab === "corrections" && <CorrectionsTab onChange={refreshPending}/>}
             {tab === "selfies" && <SelfiesTab/>}
             {tab === "org" && isAdmin && <OrgTab/>}
             {tab === "activity" && isAdmin && <ActivityTab/>}
