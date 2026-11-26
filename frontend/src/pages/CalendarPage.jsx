@@ -124,7 +124,7 @@ export default function CalendarPage() {
           <div className="space-y-5 lg:sticky lg:top-20">
             <section className="bg-card border border-border rounded-xl p-5">
               {day ? <DayDetail key={day.date} day={day} today={cal.today} onChanged={load}/>
-                : <div className="text-sm text-muted-foreground">Tap a day to see your check-ins, breaks and hours.</div>}
+                : <div className="text-sm text-muted-foreground">Tap a day to see your check-ins, selfies, breaks and hours.</div>}
             </section>
             <MyCorrections items={regs}/>
           </div>

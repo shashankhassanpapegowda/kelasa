@@ -89,7 +89,7 @@ export default function SelfieCapture({ open, title, subtitle, cta = "Confirm", 
               </>
             )}
           </div>
-          <p className="mt-3 text-[11px] text-muted-foreground">Your selfie is kept for 7 days as proof of attendance, then deleted.</p>
+          <p className="mt-3 text-[11px] text-muted-foreground">Your selfie is kept for this calendar month and the previous one, then deleted.</p>
         </div>
       </div>
     </div>
