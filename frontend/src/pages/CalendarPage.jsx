@@ -22,8 +22,15 @@ const ListView = ({ days, onSelect }) => (
             <div className="text-[11px] text-muted-foreground">{new Date(`${d.date}T00:00:00`).toLocaleDateString([], { weekday: "short" })}</div>
           </div>
           <span className={`text-[11px] px-2 py-0.5 rounded shrink-0 w-24 text-center ${st.cell}`}>{st.label}</span>
-          <div className="flex-1 font-mono text-sm text-muted-foreground truncate">
-            {first ? `${fmtTime(first.check_in)} → ${last.check_out ? fmtTime(last.check_out) : "on duty"}` : (d.holiday || "")}
+          <div className="flex-1 min-w-0">
+            <div className="font-mono text-sm text-muted-foreground truncate">
+              {first ? `${fmtTime(first.check_in)} → ${last.check_out ? fmtTime(last.check_out) : "on duty"}` : (d.holiday || "")}
+            </div>
+            {d.timing && (
+              <div className="text-[11px] text-muted-foreground truncate" data-testid={`list-timing-${d.date}`}>
+                {d.timing.off || !d.timing.working ? "Scheduled off" : `${d.timing.start}–${d.timing.end}`}
+              </div>
+            )}
           </div>
           <div className="font-mono text-sm font-semibold">{d.sessions.length ? fmtDuration(d.net_work_minutes) : ""}</div>
         </button>

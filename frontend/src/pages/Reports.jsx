@@ -215,7 +215,7 @@ export default function Reports() {
 
           <p className="mt-4 text-xs text-muted-foreground flex items-start gap-1.5 max-w-2xl">
             <WarningCircle size={14} weight="bold" className="mt-0.5 shrink-0"/>
-            Late = checked in more than <strong>15 minutes</strong> after the employee's mapped shift start. Over-break = total break time exceeds the employee's break limit on a given day. Net Work excludes break time.
+            Late means a check-in after grace: 10 minutes past a work-timing start when one is set for that day, otherwise 15 minutes past the mapped shift start. Over-break = total break time exceeds the employee's break limit on a given day. Net Work excludes break time. Kelasa does not record overtime.
           </p>
         </div>
       </main>

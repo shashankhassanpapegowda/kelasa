@@ -122,7 +122,7 @@ export default function OverviewTab() {
             <span className="font-mono text-xs text-muted-foreground">{attendance.length} SESSIONS</span>
           </div>
         </div>
-        <div className="max-h-[520px] overflow-y-auto" data-testid="attendance-log">
+        <div className="max-h-[520px] overflow-auto" data-testid="attendance-log">
           <table className="w-full text-sm">
             <thead className="text-[10px] label-overline">
               <tr className="border-b border-border">
@@ -138,8 +138,26 @@ export default function OverviewTab() {
                   <td className="p-3">
                     <div className="font-medium">{r.name || r.user_id}</div>
                     <div className="text-xs text-muted-foreground">{r.email}</div>
-                    <div className="text-[10px] font-mono text-muted-foreground mt-0.5">
-                      Shift {r.shift_start || "—"}{r.shift_end ? ` – ${r.shift_end}` : ""}
+                    <div className="text-[10px] font-mono text-muted-foreground mt-0.5 space-y-0.5">
+                      {r.timing ? (
+                        r.timing.off || !r.timing.working ? (
+                          <div data-testid={`scheduled-off-${r.record_id}`}>Scheduled off</div>
+                        ) : (
+                          <>
+                            <div data-testid={`scheduled-${r.record_id}`}>
+                              Scheduled {r.timing.start}–{r.timing.end}
+                              {r.timing.break_minutes != null ? ` · break ${r.timing.break_minutes}m` : ""}
+                            </div>
+                            {r.net_work_minutes != null && r.timing.scheduled_work_minutes != null && (
+                              <div data-testid={`worked-vs-scheduled-${r.record_id}`}>
+                                Worked {fmtDuration(r.net_work_minutes)} · scheduled {fmtDuration(r.timing.scheduled_work_minutes)}
+                              </div>
+                            )}
+                          </>
+                        )
+                      ) : (
+                        <div>Shift {r.shift_start || "—"}{r.shift_end ? ` – ${r.shift_end}` : ""}</div>
+                      )}
                     </div>
                   </td>
                   <td className="p-3 font-mono text-xs">
@@ -148,7 +166,10 @@ export default function OverviewTab() {
                       {r.late_by_minutes > 0 && <span className="text-[9px] uppercase bg-[#FF3B30]/15 text-[#FF3B30] px-1">+{r.late_by_minutes}m</span>}
                     </div>
                     <div className={`text-[10px] ${accClass(r.check_in_accuracy)}`}>{fmtAcc(r.check_in_accuracy)}</div>
-                    <div className="mt-1">{r.check_out ? fmtTime(r.check_out) : <span className="text-[#00E676]">live</span>}</div>
+                    <div className="mt-1 flex items-center gap-1.5 flex-wrap">
+                      {r.check_out ? fmtTime(r.check_out) : <span className="text-[#00E676]">live</span>}
+                      {r.early_by_minutes > 0 && <span className="text-[9px] uppercase bg-[#FEF3C7] text-[#B45309] px-1" data-testid={`early-${r.record_id}`}>{r.early_by_minutes}m early</span>}
+                    </div>
                     {r.total_break_minutes > 0 && (
                       <div className="text-[10px] text-muted-foreground mt-0.5">
                         brk {r.total_break_minutes}m {r.over_break && <span className="text-yellow-700">(over)</span>}
@@ -181,6 +202,9 @@ export default function OverviewTab() {
             </tbody>
           </table>
         </div>
+        <p className="px-4 py-3 text-[11px] text-muted-foreground border-t border-border">
+          When a work timing is set, worked time is shown next to that day's scheduled hours. Kelasa does not record overtime. Late is after the scheduled start plus grace (10 minutes unless changed). People with no timing keep their mapped shift and the 15-minute grace.
+        </p>
       </div>
 
       <PhotoModal data={photoModal} onClose={() => setPhotoModal(null)}/>

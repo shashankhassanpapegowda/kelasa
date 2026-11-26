@@ -105,6 +105,7 @@ const Session = ({ s }) => (
     <div className="flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground">
       {s.check_in_branch && <span>at {s.check_in_branch}</span>}
       {(s.late_by_minutes || 0) > 0 && <span className="text-[#C2410C]">late by {s.late_by_minutes} min</span>}
+      {(s.early_by_minutes || 0) > 0 && <span className="text-[#B45309]">left {s.early_by_minutes} min early</span>}
       {(s.total_break_minutes || 0) > 0 && <span className="inline-flex items-center gap-1"><Coffee size={12}/> {s.total_break_minutes} min break{s.over_break ? " (over limit)" : ""}</span>}
       {s.regularized && <span className="text-[#1D4ED8]">corrected by manager</span>}
       {s.auto_closed && !s.regularized && <span className="text-[#A16207] inline-flex items-center gap-1"><Warning size={12} weight="fill"/> missed check-out — closed automatically</span>}
@@ -133,6 +134,13 @@ export const DayDetail = ({ day, today, onChanged }) => {
         </div>
         <span className={`text-xs px-2 py-1 rounded ${st.cell}`} data-testid="day-status">{st.label}</span>
       </div>
+      {day.timing && (
+        <div className="text-sm font-mono" data-testid="day-timing">
+          {day.timing.off || !day.timing.working
+            ? "Scheduled day off"
+            : `Timing ${day.timing.start}–${day.timing.end}${day.timing.break_minutes != null ? ` · break ${day.timing.break_minutes}m` : ""}`}
+        </div>
+      )}
       {day.sessions.length ? day.sessions.map(s => <Session key={s.record_id} s={s}/>)
         : <div className="text-sm text-muted-foreground border border-dashed border-border p-4 text-center">No punches on this day.</div>}
       {day.sessions.length > 0 && <div className="text-sm flex justify-between"><span className="text-muted-foreground">Total worked</span><span className="font-mono font-semibold" data-testid="day-total">{fmtDuration(day.net_work_minutes)}</span></div>}

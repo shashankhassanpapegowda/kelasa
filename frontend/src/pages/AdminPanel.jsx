@@ -17,12 +17,14 @@ import SettingsTab from "@/components/admin/SettingsTab";
 import { api } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import PayrollTab from "@/components/admin/PayrollTab";
-import { Gauge, Broadcast, Users, AirplaneTilt, CalendarBlank, Megaphone, Buildings, ClockCounterClockwise, MapPinArea, BellRinging, Camera, PencilSimpleLine, GearSix, CurrencyInr } from "@phosphor-icons/react";
+import TimingsTab from "@/components/admin/TimingsTab";
+import { Gauge, Broadcast, Users, AirplaneTilt, CalendarBlank, Megaphone, Buildings, ClockCounterClockwise, MapPinArea, BellRinging, Camera, PencilSimpleLine, GearSix, CurrencyInr, Clock } from "@phosphor-icons/react";
 
 const TABS = [
   { id: "overview", label: "Overview", icon: Gauge },
   { id: "live", label: "Live Map", icon: Broadcast },
   { id: "team", label: "Team", icon: Users },
+  { id: "timings", label: "Timings", icon: Clock },
   { id: "leave", label: "Leave", icon: AirplaneTilt },
   { id: "calendar", label: "Holidays", icon: CalendarBlank },
   { id: "notices", label: "Notices", icon: Megaphone },
@@ -120,6 +122,7 @@ export default function AdminPanel() {
             {tab === "overview" && <OverviewTab/>}
             {tab === "live" && <LiveTab/>}
             {tab === "team" && <TeamTab isAdmin={isAdmin} currentUserId={user?.user_id}/>}
+            {tab === "timings" && <TimingsTab isAdmin={isAdmin} currentUserId={user?.user_id}/>}
             {tab === "leave" && <LeaveTab isAdmin={isAdmin} currentUserId={user?.user_id} onDecided={refreshPending}/>}
             {tab === "calendar" && <CalendarTab isAdmin/>}
             {tab === "notices" && <NoticesTab/>}

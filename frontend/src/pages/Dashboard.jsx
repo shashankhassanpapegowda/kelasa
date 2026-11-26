@@ -66,6 +66,7 @@ export default function Dashboard() {
   const [notice, setNotice] = useState(null);
   const [fence, setFence] = useState(null);
   const [profile, setProfile] = useState(null);
+  const [todayTiming, setTodayTiming] = useState(null);
   const [zone, setZone] = useState(null);
   const pingTimer = useRef(null);
   const tickTimer = useRef(null);
@@ -82,6 +83,7 @@ export default function Dashboard() {
     ]);
     setActive(t.data.active);
     setTodayRecords(t.data.today_records || []);
+    setTodayTiming(t.data.timing || null);
     setPings(l.data.pings || []);
     setHistory(h.data.records || []);
   };
@@ -222,7 +224,15 @@ export default function Dashboard() {
             <div>
               <div className="label-overline" data-testid="dashboard-overline">My Day</div>
               <h1 className="text-3xl sm:text-4xl font-semibold tracking-tight mt-1">{new Date().toLocaleDateString([], { weekday:'long', day:'2-digit', month:'long' })}</h1>
-              {user?.shift_start && (
+              {todayTiming ? (
+                <div className="mt-2 text-xs font-mono text-muted-foreground" data-testid="today-timing">
+                  {todayTiming.off || !todayTiming.working
+                    ? "Today · scheduled day off"
+                    : <>Today · <span className="text-foreground">{todayTiming.start}</span>{todayTiming.end ? ` – ${todayTiming.end}` : ""}
+                      {todayTiming.break_minutes != null ? ` · break ${todayTiming.break_minutes}m` : ""}
+                      {todayTiming.grace_minutes != null ? ` · late after ${todayTiming.grace_minutes}m` : ""}</>}
+                </div>
+              ) : user?.shift_start && (
                 <div className="mt-2 text-xs font-mono text-muted-foreground">
                   Shift · <span className="text-foreground">{user.shift_start}</span>{user.shift_end ? ` – ${user.shift_end}` : ""} · Break limit {user.break_max_minutes ?? 60}m
                 </div>
