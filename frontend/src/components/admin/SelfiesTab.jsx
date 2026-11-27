@@ -7,12 +7,12 @@ import { Camera, CaretLeft, CaretRight } from "@phosphor-icons/react";
 
 const retentionLine = (months) => {
   const n = Number.isFinite(Number(months)) ? Number(months) : 1;
-  if (n <= 0) return "Check-in and check-out selfies are kept for the current calendar month, then deleted.";
-  if (n === 1) return "Check-in and check-out selfies are kept for the current and previous calendar month, then deleted.";
-  return `Check-in and check-out selfies are kept for the current month and the previous ${n} calendar months, then deleted.`;
+  if (n <= 0) return "Check-in, check-out and break selfies are kept for the current calendar month, then deleted.";
+  if (n === 1) return "Check-in, check-out and break selfies are kept for the current and previous calendar month, then deleted.";
+  return `Check-in, check-out and break selfies are kept for the current month and the previous ${n} calendar months, then deleted.`;
 };
 
-const Shot = ({ path, label, time, purged }) => (
+const Shot = ({ path, label, time, purged, empty }) => (
   <div className="flex-1 min-w-0">
     <div className="flex items-baseline justify-between mb-1">
       <span className="label-overline">{label}</span>
@@ -21,12 +21,18 @@ const Shot = ({ path, label, time, purged }) => (
     {path ? (
       <AuthPhoto path={path} className="w-full aspect-[4/3] object-cover bg-black" fallback={<div className="w-full aspect-[4/3] bg-secondary"/>}/>
     ) : (
-      <div className="w-full aspect-[4/3] bg-secondary grid place-items-center text-[11px] text-muted-foreground text-center px-2">
-        {purged && time ? "Photo deleted after retention period" : time ? "No photo" : "Not checked out"}
+      <div className="w-full aspect-[4/3] bg-secondary grid place-items-center text-[11px] text-muted-foreground text-center px-2 leading-snug">
+        {purged && !path ? "Photo deleted after retention period" : (empty || (time ? "No photo" : "Not checked out"))}
       </div>
     )}
   </div>
 );
+
+const resumeEmpty = (b) => {
+  if (!b.end) return "Still on break";
+  if (!b.end_photo_path && !b.end_photo_purged && b.closed_without_selfie) return "Closed automatically — no resume selfie";
+  return "No resume selfie";
+};
 
 export default function SelfiesTab() {
   const [data, setData] = useState({ items: [], total: 0, page: 1, page_size: 24, retention_months: 1 });
@@ -69,9 +75,19 @@ export default function SelfiesTab() {
               <div className="font-mono text-xs text-muted-foreground">{item.date}</div>
             </div>
             <div className="flex gap-2">
-              <Shot path={item.check_in_photo_path} label="In" time={item.check_in} purged={item.photos_purged_at}/>
-              <Shot path={item.check_out_photo_path} label="Out" time={item.check_out} purged={item.photos_purged_at}/>
+              <Shot path={item.check_in_photo_path} label="In" time={item.check_in} purged={!!item.photos_purged_at && !item.check_in_photo_path}/>
+              <Shot path={item.check_out_photo_path} label="Out" time={item.check_out} purged={!!item.photos_purged_at && !item.check_out_photo_path && !!item.check_out}/>
             </div>
+            {(item.breaks || []).length > 0 && (
+              <div className="space-y-2" data-testid={`selfie-breaks-${item.record_id}`}>
+                {item.breaks.map((b, i) => (
+                  <div key={b.break_id || i} className="flex gap-2">
+                    <Shot path={b.start_photo_path} label={item.breaks.length > 1 ? `Break ${i + 1}` : "Break"} time={b.start} purged={b.start_photo_purged} empty="No photo"/>
+                    <Shot path={b.end_photo_path} label="Resume" time={b.end} purged={b.end_photo_purged} empty={resumeEmpty(b)}/>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         ))}
         {data.items.length === 0 && <div className="col-span-full p-8 text-center text-sm text-muted-foreground">No selfies in this range.</div>}

@@ -142,6 +142,8 @@ class LocationPing(BaseModel):
 class BreakRequest(BaseModel):
     lat: Optional[float] = None
     lng: Optional[float] = None
+    accuracy: Optional[float] = None
+    image_b64: Optional[str] = None
 
 class RoleUpdate(BaseModel):
     role: str
@@ -1145,10 +1147,29 @@ async def work_timing_view(target: dict) -> dict:
     }
 
 # ---------- Attendance ----------
-def require_selfie(image_b64: str):
+def require_selfie(image_b64: str, detail: Optional[str] = None):
     raw = (image_b64 or "").split(",", 1)[-1]
     if len(raw) < 200:
-        raise HTTPException(status_code=400, detail="Please take a selfie to check in or out.")
+        raise HTTPException(status_code=400, detail=detail or "Please take a selfie to check in or out.")
+
+def require_break_proof(payload: BreakRequest):
+    """Selfie and coordinates are required. The branch geofence is not re-checked."""
+    if payload.lat is None or payload.lng is None:
+        raise HTTPException(status_code=400, detail="Precise location is required to start or end a break.")
+    require_selfie(payload.image_b64 or "", "Please take a selfie to start or end a break.")
+
+def break_cap_minutes(user: dict) -> int:
+    raw = user.get("break_max_minutes")
+    if raw is None:
+        return 60
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return 60
+
+def break_cap_crossed(previous: int, total: int, cap: int, already_notified: bool) -> bool:
+    """True only the first time the session total moves from within the cap to over it."""
+    return (not already_notified) and previous <= cap < total
 
 @api_router.post("/attendance/checkin")
 async def check_in(payload: CheckRequest, user: dict = Depends(get_current_user)):
@@ -1269,6 +1290,47 @@ async def check_out(payload: CheckRequest, user: dict = Depends(get_current_user
     return {"ok": True, "duration_minutes": total_minutes, "net_work_minutes": net_minutes, "over_break": over_break}
 
 # ---------- Breaks ----------
+async def notify_over_break(user: dict, total: int, cap: int):
+    """Push sub-admins who cover this person once the day's break total crosses the cap.
+
+    Coverage is the same scoped_user_ids / manager_id set used everywhere else.
+    Devices with the reminders preference turned off are skipped. Full admins
+    are not added here; payroll and the rest of the admin surface stay as they are.
+    """
+    subs = await db.push_subscriptions.find({"reminders": {"$ne": False}}, {"_id": 0}).to_list(5000)
+    if not subs:
+        return
+    managers = await db.users.find(
+        {"user_id": {"$in": list({x["user_id"] for x in subs})}, "role": "sub_admin"},
+        {"_id": 0},
+    ).to_list(500)
+    allowed = set()
+    for manager in managers:
+        ids = await scoped_user_ids(manager)
+        if ids is not None and user.get("user_id") in ids:
+            allowed.add(manager["user_id"])
+    targets = [sub for sub in subs if sub["user_id"] in allowed]
+    if not targets:
+        return
+    name = user.get("name") or user.get("email") or "Employee"
+    branch = user.get("site") or "No branch"
+    await push_to_subscriptions(targets, {
+        "title": f"{name} is over the break limit",
+        "body": f"{name} · {branch} · {total} min break (limit {cap})",
+        "tag": f"over-break-{user.get('user_id')}-{user_local_today(user)}",
+        "url": "/admin#live",
+        "employee_name": name,
+        "branch": branch,
+        "minutes": total,
+    })
+    logger.info(f"Over-break push for {user.get('user_id')} ({total} min, limit {cap})")
+
+async def notify_over_break_safe(user: dict, total: int, cap: int):
+    try:
+        await notify_over_break(user, total, cap)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(f"Over-break push failed for {user.get('user_id')}: {type(exc).__name__}")
+
 @api_router.post("/attendance/break/start")
 async def break_start(payload: BreakRequest, user: dict = Depends(get_current_user)):
     active = await db.attendance.find_one(
@@ -1279,7 +1341,9 @@ async def break_start(payload: BreakRequest, user: dict = Depends(get_current_us
         raise HTTPException(status_code=400, detail="Not currently on duty")
     if active.get("on_break"):
         raise HTTPException(status_code=400, detail="Already on break")
+    require_break_proof(payload)
 
+    photo_path = upload_face_image(user["user_id"], payload.image_b64, "break_start")
     break_id = f"brk_{uuid.uuid4().hex[:10]}"
     brk = {
         "break_id": break_id,
@@ -1288,8 +1352,12 @@ async def break_start(payload: BreakRequest, user: dict = Depends(get_current_us
         "duration_minutes": None,
         "start_lat": payload.lat,
         "start_lng": payload.lng,
+        "start_accuracy": payload.accuracy,
+        "start_photo_path": photo_path,
         "end_lat": None,
         "end_lng": None,
+        "end_accuracy": None,
+        "end_photo_path": None,
     }
     await db.attendance.update_one(
         {"record_id": active["record_id"]},
@@ -1319,7 +1387,9 @@ async def break_end(payload: BreakRequest, user: dict = Depends(get_current_user
             break
     if last is None:
         raise HTTPException(status_code=400, detail="No open break")
+    require_break_proof(payload)
 
+    photo_path = upload_face_image(user["user_id"], payload.image_b64, "break_end")
     start_dt = datetime.fromisoformat(breaks[last]["start"])
     if start_dt.tzinfo is None:
         start_dt = start_dt.replace(tzinfo=timezone.utc)
@@ -1329,14 +1399,21 @@ async def break_end(payload: BreakRequest, user: dict = Depends(get_current_user
     breaks[last]["end"] = end_dt.isoformat()
     breaks[last]["end_lat"] = payload.lat
     breaks[last]["end_lng"] = payload.lng
+    breaks[last]["end_accuracy"] = payload.accuracy
+    breaks[last]["end_photo_path"] = photo_path
     breaks[last]["duration_minutes"] = mins
     total = sum((b.get("duration_minutes") or 0) for b in breaks)
-
-    await db.attendance.update_one(
-        {"record_id": active["record_id"]},
-        {"$set": {"breaks": breaks, "on_break": False, "total_break_minutes": total}}
-    )
-    return {"ok": True, "duration_minutes": mins, "total_break_minutes": total}
+    previous = int(active.get("total_break_minutes") or 0)
+    cap = break_cap_minutes(user)
+    over = total > cap
+    notify = break_cap_crossed(previous, total, cap, bool(active.get("over_break_notified")))
+    updates = {"breaks": breaks, "on_break": False, "total_break_minutes": total, "over_break": over}
+    if notify:
+        updates["over_break_notified"] = True
+    await db.attendance.update_one({"record_id": active["record_id"]}, {"$set": updates})
+    if notify:
+        await notify_over_break_safe(user, total, cap)
+    return {"ok": True, "duration_minutes": mins, "total_break_minutes": total, "over_break": over}
 
 @api_router.get("/attendance/geofence")
 async def my_geofence(user: dict = Depends(get_current_user)):
@@ -1403,22 +1480,37 @@ async def location_today(user: dict = Depends(get_current_user), date: Optional[
     return {"date": d, "pings": pings}
 
 # ---------- Admin ----------
-async def close_session(rec: dict, u: dict, close_at: datetime, reason: str, extra: Optional[dict] = None):
+async def close_session(rec: dict, u: dict, close_at: datetime, reason: str, extra: Optional[dict] = None, notify: bool = False):
     breaks = rec.get("breaks") or []
-    total_break = int(rec.get("total_break_minutes") or 0)
+    previous = int(rec.get("total_break_minutes") or 0)
+    total_break = previous
     if rec.get("on_break") and breaks and not breaks[-1].get("end"):
         start = parse_iso(breaks[-1]["start"])
         mins = max(0, int((close_at - start).total_seconds() // 60))
-        breaks[-1].update({"end": close_at.isoformat(), "duration_minutes": mins})
+        # The open break is closed at this instant. There is no resume selfie.
+        breaks[-1].update({
+            "end": close_at.isoformat(),
+            "duration_minutes": mins,
+            "closed_without_selfie": True,
+        })
         total_break = sum((b.get("duration_minutes") or 0) for b in breaks)
     calc = compute_session(rec["check_in"], close_at.isoformat(), total_break, u.get("shift_start"), u.get("shift_end"))
-    await db.attendance.update_one({"record_id": rec["record_id"]}, {"$set": {
+    cap = break_cap_minutes(u)
+    over = total_break > cap
+    crossed = notify and break_cap_crossed(previous, total_break, cap, bool(rec.get("over_break_notified")))
+    fields = {
         "check_out": close_at.isoformat(), "status": "off_duty", "on_break": False, "breaks": breaks,
         "total_break_minutes": total_break, "auto_closed": True, "auto_close_reason": reason,
-        "over_break": total_break > int(u.get("break_max_minutes") if u.get("break_max_minutes") is not None else 60),
-        **calc, **(extra or {}),
-    }})
+        "over_break": over, **calc, **(extra or {}),
+    }
+    if crossed:
+        fields["over_break_notified"] = True
+    await db.attendance.update_one({"record_id": rec["record_id"]}, {"$set": fields})
     await resolve_alerts({"record_id": rec["record_id"], "resolved_at": None}, close_at.isoformat(), "auto-closed")
+    if crossed:
+        person = dict(u)
+        person.setdefault("user_id", rec.get("user_id"))
+        await notify_over_break_safe(person, total_break, cap)
 
 async def auto_close_stale_sessions():
     now = now_utc()
@@ -1438,7 +1530,7 @@ async def auto_close_stale_sessions():
                 start, end = cap_shift(timing, u.get("shift_start"), u.get("shift_end"))
             else:
                 start, end = u.get("shift_start"), u.get("shift_end")
-            await close_session(rec, u, session_cap(rec["check_in"], tz, start, end), "missed checkout")
+            await close_session(rec, u, session_cap(rec["check_in"], tz, start, end), "missed checkout", notify=True)
             closed += 1
     return closed
 
@@ -1813,6 +1905,24 @@ async def admin_reset_face(user_id: str, user: dict = Depends(require_manager)):
     await log_activity(user, "face_reset", emp.get("name") or user_id)
     return {"ok": True}
 
+def break_photo_fields(breaks) -> list:
+    rows = []
+    for brk in breaks or []:
+        if not isinstance(brk, dict):
+            continue
+        rows.append({
+            "break_id": brk.get("break_id"),
+            "start": brk.get("start"),
+            "end": brk.get("end"),
+            "duration_minutes": brk.get("duration_minutes"),
+            "start_photo_path": brk.get("start_photo_path"),
+            "end_photo_path": brk.get("end_photo_path"),
+            "start_photo_purged": bool(brk.get("start_photo_purged")),
+            "end_photo_purged": bool(brk.get("end_photo_purged")),
+            "closed_without_selfie": bool(brk.get("closed_without_selfie")),
+        })
+    return rows
+
 # ---------- Face check review ----------
 @api_router.get("/admin/face-checks")
 async def admin_face_checks(user: dict = Depends(require_manager), flagged: bool = False, person: Optional[str] = None,
@@ -1826,7 +1936,9 @@ async def admin_face_checks(user: dict = Depends(require_manager), flagged: bool
         q["date"] = {k: v for k, v in (("$gte", from_date), ("$lte", to_date)) if v}
     q["$or"] = ([{"check_in_face_review": True}, {"check_out_face_review": True}] if flagged else
                 [{"check_in_photo_path": {"$ne": None}}, {"check_out_photo_path": {"$ne": None}},
-                 {"check_in_face_review": True}, {"check_out_face_review": True}])
+                 {"check_in_face_review": True}, {"check_out_face_review": True},
+                 {"breaks": {"$elemMatch": {"start_photo_path": {"$ne": None}}}},
+                 {"breaks": {"$elemMatch": {"end_photo_path": {"$ne": None}}}}])
     total = await db.attendance.count_documents(q)
     recs = await db.attendance.find(q, {"_id": 0}).sort("check_in", -1).skip((page - 1) * page_size).limit(page_size).to_list(page_size)
     users = {u["user_id"]: u for u in await db.users.find({"user_id": {"$in": list({r["user_id"] for r in recs})}},
@@ -1850,25 +1962,30 @@ async def admin_face_checks(user: dict = Depends(require_manager), flagged: bool
             "check_out_face_review_note", "check_in_face_reviewed_at", "check_out_face_reviewed_at")},
             "check_in_face_reviewed_by": reviewers.get(r.get("check_in_face_reviewed_by")),
             "check_out_face_reviewed_by": reviewers.get(r.get("check_out_face_reviewed_by")),
+            "auto_closed": bool(r.get("auto_closed")),
+            "breaks": break_photo_fields(r.get("breaks")),
             "name": u.get("name") or u.get("email"), "site": u.get("site"), "enrollment_photo_path": u.get("face_photo_path")})
     return {"items": items, "total": total, "page": page, "page_size": page_size, "pending_review": pending,
             "retention_months": selfie_retention.selfie_retention_months()}
 
 # ---------- Selfie retention ----------
-# Check-in and check-out selfies only. Enrolment photos (face_photo_path) and
-# avatars live on the user document and are never selected here.
+# Punch and break selfies. Enrolment photos and avatars live on the user
+# document and are never selected here. Each break photo is judged by its own
+# start or end timestamp, not by the punch on the same session.
 async def run_selfie_purge() -> int:
     cutoff = selfie_retention.selfie_retention_cutoff()
     cutoff_iso = cutoff.isoformat()
-    # Each selfie is judged by the time it was taken. A check-out that falls
-    # inside the window is kept even when the check-in on the same record is older.
+    # Each selfie is judged by the time it was taken. A later photo on the
+    # same record is kept even when an earlier one is past the cutoff.
     recs = await db.attendance.find(
         {"$or": [
             {"check_in_photo_path": {"$ne": None}, "check_in": {"$lt": cutoff_iso}},
             {"check_out_photo_path": {"$ne": None}, "check_out": {"$lt": cutoff_iso}},
+            {"breaks": {"$elemMatch": {"start_photo_path": {"$ne": None}, "start": {"$lt": cutoff_iso}}}},
+            {"breaks": {"$elemMatch": {"end_photo_path": {"$ne": None}, "end": {"$lt": cutoff_iso}}}},
         ]},
         {"_id": 0, "record_id": 1, "check_in": 1, "check_out": 1,
-         "check_in_photo_path": 1, "check_out_photo_path": 1},
+         "check_in_photo_path": 1, "check_out_photo_path": 1, "breaks": 1},
     ).to_list(5000)
     cleared = 0
     for r in recs:
@@ -1879,6 +1996,19 @@ async def run_selfie_purge() -> int:
             if path and selfie_retention.photo_taken_before(r.get(kind), cutoff):
                 await asyncio.to_thread(scrub_object, path)
                 updates[path_key] = None
+        breaks = [dict(b) for b in (r.get("breaks") or []) if isinstance(b, dict)]
+        break_changed = False
+        for brk in breaks:
+            for side in ("start", "end"):
+                path_key = f"{side}_photo_path"
+                path = brk.get(path_key)
+                if path and selfie_retention.photo_taken_before(brk.get(side), cutoff):
+                    await asyncio.to_thread(scrub_object, path)
+                    brk[path_key] = None
+                    brk[f"{side}_photo_purged"] = True
+                    break_changed = True
+        if break_changed:
+            updates["breaks"] = breaks
         if not updates:
             # The query can over-select on odd timestamp strings. Do not scrub
             # a photo whose real timestamp is still inside the window.

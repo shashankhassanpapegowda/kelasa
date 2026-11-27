@@ -54,6 +54,22 @@ const SessionPhotos = ({ s }) => {
   );
 };
 
+const resumeEmpty = (b) => {
+  if (!b.end) return "Still on break";
+  if (!b.end_photo_path && !b.end_photo_purged && b.closed_without_selfie) return "Closed automatically — no resume selfie";
+  return "No resume selfie";
+};
+
+const BreakShots = ({ b, index, total }) => {
+  const prefix = total > 1 ? `Break ${index + 1}` : "Break";
+  return (
+    <div className="flex gap-2" data-testid={`day-break-${index}`}>
+      <SelfieShot path={b.start_photo_path} label={`${prefix} start`} time={b.start} purged={!!b.start_photo_purged} empty="No photo"/>
+      <SelfieShot path={b.end_photo_path} label={`${prefix} resume`} time={b.end} purged={!!b.end_photo_purged} empty={resumeEmpty(b)}/>
+    </div>
+  );
+};
+
 const hhmm = (iso) => (iso ? new Date(iso).toTimeString().slice(0, 5) : "");
 
 const CorrectionForm = ({ day, onDone, onCancel }) => {
@@ -112,8 +128,8 @@ const Session = ({ s }) => (
     </div>
     <SessionPhotos s={s}/>
     {(s.breaks || []).length > 0 && (
-      <div className="text-[11px] font-mono text-muted-foreground">
-        {s.breaks.map((b, i) => <span key={i} className="mr-3">break {fmtTime(b.start)}–{b.end ? fmtTime(b.end) : "…"}</span>)}
+      <div className="space-y-2" data-testid={`day-breaks-${s.record_id}`}>
+        {s.breaks.map((b, i) => <BreakShots key={b.break_id || i} b={b} index={i} total={s.breaks.length}/>)}
       </div>
     )}
   </div>
