@@ -1,4 +1,5 @@
-import { Warning } from "@phosphor-icons/react";
+import { Camera, Warning } from "@phosphor-icons/react";
+import { dayHasSelfies } from "./dayPhotos.mjs";
 
 export const STATUS = {
   present: { label: "Present", cell: "bg-[#E7F7EE] text-[#15803D]", dot: "bg-[#16A34A]" },
@@ -43,6 +44,7 @@ export const CalendarGrid = ({ days, today, selected, onSelect }) => {
         {days.map(d => {
           const st = STATUS[d.status] || STATUS.future;
           const isToday = d.date === today;
+          const photos = dayHasSelfies(d);
           return (
             <button key={d.date} onClick={() => onSelect(d.date)} data-testid={`cal-day-${d.date}`} data-status={d.status}
               data-timing={d.timing ? (d.timing.off || !d.timing.working ? "off" : `${d.timing.start}-${d.timing.end}`) : ""}
@@ -50,6 +52,7 @@ export const CalendarGrid = ({ days, today, selected, onSelect }) => {
               className={`relative aspect-square sm:aspect-[5/4] rounded-md grid place-items-center text-base sm:text-lg font-semibold transition-transform hover:scale-[1.04] ${st.cell}
                 ${isToday ? "ring-2 ring-[#1D4ED8]" : ""} ${selected === d.date ? "outline outline-2 outline-offset-2 outline-foreground" : ""}`}>
               {Number(d.date.slice(8))}
+              {photos && <Camera size={12} weight="fill" className="absolute bottom-1 left-1 opacity-80" data-testid={`cal-photo-${d.date}`} aria-hidden="true"/>}
               {d.status === "punch_error" && <Warning size={11} weight="fill" className="absolute top-1 right-1 text-[#EAB308]"/>}
               {d.regularization?.status === "pending" && <span className="absolute bottom-1 right-1 w-1.5 h-1.5 rounded-full bg-[#1D4ED8]" title="Correction pending"/>}
             </button>

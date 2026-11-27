@@ -402,6 +402,9 @@ class TestPurge:
     def test_day_payload_keeps_break_photo_paths_and_purged_markers(self):
         purge = inspect.getsource(server.run_selfie_purge)
         assert "breaks" in server.SESSION_KEYS
+        for key in ("check_in_lat", "check_in_lng", "check_out_lat", "check_out_lng",
+                    "check_in_photo_path", "check_out_photo_path", "photos_purged_at"):
+            assert key in server.SESSION_KEYS
         assert "start_photo_path" in purge and "end_photo_path" in purge
         assert "_photo_purged" in purge
         assert "SESSION_KEYS" in inspect.getsource(server.build_calendar)
@@ -410,15 +413,23 @@ class TestPurge:
                 "start_photo_path": "break-start.jpg",
                 "end_photo_path": None,
                 "end_photo_purged": True,
+                "start_lat": 12.97,
+                "start_lng": 77.59,
             }],
             "photos_purged_at": "2026-12-15T00:00:00+00:00",
             "check_in_photo_path": "in.jpg",
+            "check_in_lat": 12.9716,
+            "check_in_lng": 77.5946,
+            "check_out_lat": 12.98,
+            "check_out_lng": 77.60,
         }
         session = {k: rec.get(k) for k in server.SESSION_KEYS}
         assert session["breaks"][0]["start_photo_path"] == "break-start.jpg"
         assert session["breaks"][0]["end_photo_purged"] is True
+        assert session["breaks"][0]["start_lat"] == 12.97
         assert session["photos_purged_at"]
         assert session["check_in_photo_path"] == "in.jpg"
+        assert session["check_in_lat"] == 12.9716 and session["check_out_lng"] == 77.60
 
 
 # ---------- who can fetch a selfie ----------

@@ -5,7 +5,9 @@ import { toast } from "sonner";
 import { fmtTime, fmtDuration } from "@/lib/format";
 import { CalendarGrid, Legend, STATUS } from "@/components/calendar/CalendarGrid";
 import { DayDetail } from "@/components/calendar/DayDetail";
-import { CalendarBlank, ListBullets, CaretLeft, CaretRight, DownloadSimple, ClockCounterClockwise } from "@phosphor-icons/react";
+import { CalendarBlank, ListBullets, CaretLeft, CaretRight, DownloadSimple, ClockCounterClockwise, Camera } from "@phosphor-icons/react";
+import PhotoLightbox from "@/components/calendar/PhotoLightbox";
+import { dayHasSelfies, dayPhotoShots } from "@/components/calendar/dayPhotos.mjs";
 
 const thisMonth = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`; };
 const shiftMonth = (m, n) => { const [y, mo] = m.split("-").map(Number); const d = new Date(y, mo - 1 + n, 1); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`; };
@@ -32,6 +34,7 @@ const ListView = ({ days, onSelect }) => (
               </div>
             )}
           </div>
+          {dayHasSelfies(d) && <Camera size={16} weight="fill" className="text-muted-foreground shrink-0" data-testid={`list-photo-${d.date}`} aria-hidden="true"/>}
           <div className="font-mono text-sm font-semibold">{d.sessions.length ? fmtDuration(d.net_work_minutes) : ""}</div>
         </button>
       );
@@ -66,6 +69,7 @@ export default function CalendarPage() {
   const [view, setView] = useState("calendar");
   const [cal, setCal] = useState(null);
   const [selected, setSelected] = useState(null);
+  const [lightbox, setLightbox] = useState(null);
   const [regs, setRegs] = useState([]);
 
   const load = () => {
@@ -86,6 +90,22 @@ export default function CalendarPage() {
   const title = new Date(`${month}-01T00:00:00`).toLocaleDateString([], { month: "long", year: "numeric" });
   const day = cal?.days.find(d => d.date === selected);
   const c = cal?.counts || {};
+  const lightboxDay = lightbox ? cal?.days.find(d => d.date === lightbox.date) : null;
+  const lightboxShots = lightboxDay ? dayPhotoShots(lightboxDay) : [];
+
+  // A tap opens the day's selfies. The automatic "today" selection on load does not.
+  const openPhotos = (date, index = 0) => {
+    setSelected(date);
+    const picked = cal?.days.find(d => d.date === date);
+    if (picked && dayHasSelfies(picked)) setLightbox({ date, index });
+    else setLightbox(null);
+  };
+
+  const shift = (delta) => {
+    setLightbox(null);
+    setMonth(shiftMonth(month, delta));
+    setSelected(null);
+  };
 
   return (
     <div className="min-h-screen bg-background">
@@ -103,17 +123,17 @@ export default function CalendarPage() {
         </div>
 
         <div className="flex items-center justify-between">
-          <button onClick={() => { setMonth(shiftMonth(month, -1)); setSelected(null); }} className="p-2.5 rounded-full bg-[#EFF6FF] text-[#1D4ED8]" data-testid="month-prev"><CaretLeft size={20} weight="bold"/></button>
+          <button onClick={() => shift(-1)} className="p-2.5 rounded-full bg-[#EFF6FF] text-[#1D4ED8]" data-testid="month-prev"><CaretLeft size={20} weight="bold"/></button>
           <div className="text-xl sm:text-2xl font-semibold" data-testid="month-title">{title}</div>
-          <button onClick={() => { setMonth(shiftMonth(month, 1)); setSelected(null); }} disabled={month >= thisMonth()} className="p-2.5 rounded-full bg-[#EFF6FF] text-[#1D4ED8] disabled:opacity-30" data-testid="month-next"><CaretRight size={20} weight="bold"/></button>
+          <button onClick={() => shift(1)} disabled={month >= thisMonth()} className="p-2.5 rounded-full bg-[#EFF6FF] text-[#1D4ED8] disabled:opacity-30" data-testid="month-next"><CaretRight size={20} weight="bold"/></button>
         </div>
 
         <div className="grid lg:grid-cols-[1fr_360px] gap-5 items-start">
           <div className="space-y-5">
             <section className="bg-card border border-border rounded-xl p-4 sm:p-6 space-y-6">
               {!cal ? <div className="loading-bar"/> : view === "calendar"
-                ? <CalendarGrid days={cal.days} today={cal.today} selected={selected} onSelect={setSelected}/>
-                : <ListView days={cal.days} onSelect={setSelected}/>}
+                ? <CalendarGrid days={cal.days} today={cal.today} selected={selected} onSelect={openPhotos}/>
+                : <ListView days={cal.days} onSelect={openPhotos}/>}
               <div className="border-t border-border pt-4"><Legend/></div>
             </section>
             {cal && (
@@ -130,13 +150,16 @@ export default function CalendarPage() {
           </div>
           <div className="space-y-5 lg:sticky lg:top-20">
             <section className="bg-card border border-border rounded-xl p-5">
-              {day ? <DayDetail key={day.date} day={day} today={cal.today} onChanged={load}/>
-                : <div className="text-sm text-muted-foreground">Tap a day to see your check-ins, selfies, breaks and hours.</div>}
+              {day ? <DayDetail key={day.date} day={day} today={cal.today} onChanged={load} onOpenPhotos={(index) => openPhotos(day.date, index)}/>
+                : <div className="text-sm text-muted-foreground">Tap a day to see your hours. A camera mark opens that day's selfies.</div>}
             </section>
             <MyCorrections items={regs}/>
           </div>
         </div>
       </main>
+      {lightbox && lightboxShots.length > 0 && (
+        <PhotoLightbox shots={lightboxShots} index={lightbox.index || 0} onClose={() => setLightbox(null)}/>
+      )}
     </div>
   );
 }

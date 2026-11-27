@@ -3756,7 +3756,9 @@ def _month_bounds(month: str):
 SESSION_KEYS = ("record_id", "check_in", "check_out", "net_work_minutes", "duration_minutes", "total_break_minutes",
                 "breaks", "late_by_minutes", "early_by_minutes", "auto_closed", "auto_close_reason", "over_cap", "over_break", "regularized",
                 "check_in_branch", "check_out_branch", "status",
-                "check_in_photo_path", "check_out_photo_path", "photos_purged_at")
+                "check_in_photo_path", "check_out_photo_path", "photos_purged_at",
+                "check_in_lat", "check_in_lng", "check_in_accuracy",
+                "check_out_lat", "check_out_lng", "check_out_accuracy")
 
 async def build_calendar(u: dict, month: str) -> dict:
     await auto_close_stale_sessions()
