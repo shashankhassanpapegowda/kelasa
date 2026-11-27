@@ -11,7 +11,7 @@ Recorded by the owner after this spec was written, and enforced in the implement
 - Employees can only view and download their own published payslips (and raise a query on them), plus their own read-only salary structure summary.
 - This replaces section 5.5's optional "Payroll for my branches" grant. Sub-admins cannot approve, and they also cannot view.
 
-The app is self-hosted. Payslip PDFs are rendered on the server with reportlab. Files go through the existing storage helper, with a local-disk fallback when that helper is not configured. No Emergent dependency is added.
+The app is self-hosted. Payslip PDFs are rendered on the server with reportlab. Files go through the existing storage helper, with a local-disk fallback when that helper is not configured.
 
 ---
 

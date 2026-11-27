@@ -13,7 +13,7 @@ import requests
 from bson import json_util
 from pymongo import MongoClient
 
-BASE_URL = os.environ.get('REACT_APP_BACKEND_URL', 'https://employee-locator-4.preview.emergentagent.com').rstrip('/')
+BASE_URL = os.environ.get('REACT_APP_BACKEND_URL', 'http://localhost:8000').rstrip('/')
 MONGO_URL = os.environ.get('MONGO_URL', 'mongodb://localhost:27017')
 DB_NAME = os.environ.get('DB_NAME', 'test_database')
 ADMIN = {"Authorization": "Bearer test_session_admin_001"}
@@ -29,7 +29,7 @@ def _env_secrets():
         if "=" in line:
             k, v = line.strip().split("=", 1)
             v = v.strip().strip('"').strip("'")
-            if k in ("EMERGENT_LLM_KEY", "EMERGENT_EMAIL_KEY", "WEBHOOK_CRON_SECRET", "VAPID_PRIVATE_KEY", "ADMIN_PASSWORD") and len(v) >= 8:
+            if k in ("SMTP_PASSWORD", "PAYROLL_DATA_KEY", "WEBHOOK_CRON_SECRET", "VAPID_PRIVATE_KEY", "ADMIN_PASSWORD") and len(v) >= 8:
                 vals[k] = v
     return vals
 

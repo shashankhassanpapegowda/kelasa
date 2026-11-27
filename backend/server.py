@@ -12,7 +12,6 @@ import binascii
 import io
 import csv
 import httpx
-import requests
 import bcrypt
 import secrets as pysecrets
 import hmac
@@ -62,66 +61,50 @@ logger = logging.getLogger(__name__)
 DEFAULT_TZ = "Asia/Kolkata"
 LATE_GRACE_MINUTES = 15
 
-# ---------- Object Storage ----------
-STORAGE_BASE = (os.environ.get("INTEGRATION_PROXY_URL") or "").strip() or "https://integrations.emergentagent.com"
-STORAGE_URL = STORAGE_BASE.rstrip("/") + "/objstore/api/v1/storage"
-EMERGENT_KEY = os.environ.get("EMERGENT_LLM_KEY")
+
+# ---------- Object storage (local disk) ----------
+from pathlib import Path as _StoragePath
+
+LOCAL_STORAGE_DIR = _StoragePath(os.environ.get("LOCAL_STORAGE_DIR", "/data/uploads")).resolve()
 APP_NAME = "gtg-attendance"
-storage_key = None
+
+
+def _safe_storage_path(path: str) -> _StoragePath:
+    rel = _StoragePath(path)
+    if rel.is_absolute() or ".." in rel.parts:
+        raise HTTPException(status_code=400, detail="Invalid path")
+    full = (LOCAL_STORAGE_DIR / rel).resolve()
+    if full != LOCAL_STORAGE_DIR and LOCAL_STORAGE_DIR not in full.parents:
+        raise HTTPException(status_code=400, detail="Invalid path")
+    return full
+
 
 def init_storage():
-    global storage_key
-    if storage_key:
-        return storage_key
-    try:
-        resp = requests.post(f"{STORAGE_URL}/init", json={"emergent_key": EMERGENT_KEY}, timeout=30)
-        resp.raise_for_status()
-        storage_key = resp.json()["storage_key"]
-        logger.info("Storage initialized")
-        return storage_key
-    except Exception as e:
-        logger.error(f"Storage init failed: {e}")
-        return None
+    LOCAL_STORAGE_DIR.mkdir(parents=True, exist_ok=True)
+    return str(LOCAL_STORAGE_DIR)
+
 
 def put_object(path: str, data: bytes, content_type: str):
-    key = init_storage()
-    if not key:
-        raise HTTPException(status_code=500, detail="Storage unavailable")
-    resp = requests.put(
-        f"{STORAGE_URL}/objects/{path}",
-        headers={"X-Storage-Key": key, "Content-Type": content_type},
-        data=data, timeout=120
-    )
-    if resp.status_code == 403:
-        global storage_key
-        storage_key = None
-        key = init_storage()
-        resp = requests.put(
-            f"{STORAGE_URL}/objects/{path}",
-            headers={"X-Storage-Key": key, "Content-Type": content_type},
-            data=data, timeout=120
-        )
-    resp.raise_for_status()
-    return resp.json()
+    dest = _safe_storage_path(path)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_bytes(data)
+    return {"path": path, "content_type": content_type}
+
 
 def get_object(path: str):
-    key = init_storage()
-    if not key:
-        raise HTTPException(status_code=500, detail="Storage unavailable")
-    resp = requests.get(
-        f"{STORAGE_URL}/objects/{path}",
-        headers={"X-Storage-Key": key}, timeout=60
-    )
-    if resp.status_code == 403:
-        global storage_key
-        storage_key = None
-        key = init_storage()
-        resp = requests.get(
-            f"{STORAGE_URL}/objects/{path}",
-            headers={"X-Storage-Key": key}, timeout=60
-        )
-    resp.raise_for_status()
-    return resp.content, resp.headers.get("Content-Type", "image/jpeg")
+    dest = _safe_storage_path(path)
+    if not dest.is_file():
+        raise FileNotFoundError(path)
+    data = dest.read_bytes()
+    suffix = dest.suffix.lower()
+    content_type = {
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+        ".png": "image/png",
+        ".webp": "image/webp",
+        ".pdf": "application/pdf",
+    }.get(suffix, "application/octet-stream")
+    return data, content_type
 
 # ---------- Models ----------
 class CheckRequest(BaseModel):
@@ -691,11 +674,14 @@ async def log_activity(actor: dict, action: str, target_name: str = "", details:
     })
 
 def scrub_object(path: str):
-    """Storage has no delete API, so overwrite the photo with an empty file."""
     try:
-        put_object(path, b"", "image/jpeg")
+        dest = _safe_storage_path(path)
+        dest.unlink(missing_ok=True)
+    except HTTPException:
+        raise
     except Exception as e:
         logger.warning(f"Could not scrub {path}: {e}")
+
 
 def upload_face_image(user_id: str, image_b64: str, kind: str) -> str:
     if image_b64.startswith("data:"):
@@ -725,9 +711,7 @@ async def logout(request: Request, response: Response):
     response.delete_cookie("session_token", path="/")
     return {"ok": True}
 
-# ---------- Email (Emergent managed Resend) ----------
-EMAIL_BASE_URL = "https://integrations.emergentagent.com"
-EMAIL_KEY = os.environ.get("EMERGENT_EMAIL_KEY", "")
+# ---------- Email (SMTP) ----------
 EMAIL_FROM_NAME = os.environ.get("EMAIL_FROM_NAME", "Kelasa")
 EMAIL_REPLY_TO = os.environ.get("EMAIL_REPLY_TO")
 APP_PUBLIC_URL = os.environ.get("APP_PUBLIC_URL", "").rstrip("/")
@@ -798,37 +782,45 @@ def _assert_safe_email(subject: str, html: str) -> None:
 
 async def send_email(*, to: str, subject: str, html: str, reply_to: Optional[str] = None) -> Optional[str]:
     _assert_safe_email(subject, html)
-    if not EMAIL_KEY:
-        logger.error("EMERGENT_EMAIL_KEY is not configured; cannot send email")
+    host = (os.environ.get("SMTP_HOST") or "").strip()
+    if not host:
+        logger.error("SMTP_HOST is not configured; cannot send email")
         raise HTTPException(status_code=503, detail="Email is temporarily unavailable")
-    payload = {"to": [to], "subject": subject, "html": html, "from_name": EMAIL_FROM_NAME}
-    if reply_to or EMAIL_REPLY_TO:
-        payload["contact_email"] = reply_to or EMAIL_REPLY_TO
+    import smtplib
+    import ssl
+    from email.message import EmailMessage
+    port = int(os.environ.get("SMTP_PORT", "587"))
+    user = os.environ.get("SMTP_USER", "")
+    password = os.environ.get("SMTP_PASSWORD", "")
+    from_addr = os.environ.get("SMTP_FROM") or os.environ.get("EMAIL_REPLY_TO") or user
+    starttls = os.environ.get("SMTP_STARTTLS", "true").lower() in ("1", "true", "yes")
+    msg = EmailMessage()
+    msg["Subject"] = subject
+    msg["From"] = from_addr
+    msg["To"] = to
+    chosen_reply = reply_to or os.environ.get("EMAIL_REPLY_TO")
+    if chosen_reply:
+        msg["Reply-To"] = chosen_reply
+    msg.set_content("This message is HTML. Open it in an email app that supports HTML.")
+    msg.add_alternative(html, subtype="html")
     try:
-        async with httpx.AsyncClient(timeout=30) as client:
-            resp = await client.post(
-                f"{EMAIL_BASE_URL}/api/v1/email/send",
-                headers={"X-Email-Key": EMAIL_KEY},
-                json=payload,
-            )
-        resp.raise_for_status()
-        return resp.json().get("id")
-    except httpx.HTTPStatusError as e:
-        try:
-            code = e.response.json().get("code", "")
-            message = e.response.json().get("message", "")
-        except ValueError:
-            code, message = "", ""
-        if code in ("insufficient_credits", "integration_disabled", "daily_limit_reached"):
-            logger.warning(f"Email paused: {code} ({e.response.status_code}): {message}")
-            raise HTTPException(status_code=503, detail="Email is temporarily unavailable") from None
-        logger.error(f"Email send failed: {e.response.status_code} {e.response.text}")
-        raise HTTPException(status_code=502, detail="Failed to send email") from None
-    except HTTPException:
-        raise
+        if starttls:
+            with smtplib.SMTP(host, port, timeout=30) as smtp:
+                smtp.ehlo()
+                smtp.starttls(context=ssl.create_default_context())
+                if user:
+                    smtp.login(user, password)
+                smtp.send_message(msg)
+        else:
+            with smtplib.SMTP_SSL(host, port, timeout=30, context=ssl.create_default_context()) as smtp:
+                if user:
+                    smtp.login(user, password)
+                smtp.send_message(msg)
     except Exception as e:
-        logger.error(f"Email send error: {e}")
+        logger.error("Email send error: %s", e)
         raise HTTPException(status_code=500, detail="Failed to send email") from None
+    return None
+
 
 # ---------- Password authentication ----------
 MIN_PASSWORD_LENGTH = 8
