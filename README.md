@@ -1,6 +1,6 @@
 # ಕೆಲಸ (Kelasa)
 
-Employee attendance, leave and payroll app for Gyarahalli Thammayya Groups (GT Groups).
+Employee attendance, leave and payroll app Powered By Gyarahalli Thammayya Groups.
 It is an installable PWA (React) on a FastAPI + MongoDB backend, self-hosted at https://kelasa.gtgroups.in.
 
 ## What it does
