@@ -29,7 +29,7 @@ const TABS = [
   { id: "calendar", label: "Holidays", icon: CalendarBlank },
   { id: "notices", label: "Notices", icon: Megaphone },
   { id: "alerts", label: "Alerts", icon: BellRinging },
-  { id: "corrections", label: "Corrections", icon: PencilSimpleLine },
+  { id: "corrections", label: "Corrections", icon: PencilSimpleLine, adminOnly: true },
   { id: "selfies", label: "Selfies", icon: Camera },
   { id: "branches", label: "Branches", icon: MapPinArea, adminOnly: true },
   { id: "org", label: "Organisation", icon: Buildings, adminOnly: true },
@@ -49,9 +49,11 @@ export default function AdminPanel() {
     api.get("/admin/leave?status=pending")
       .then(r => setPendingLeave(r.data.pending_count || 0))
       .catch(() => {});
-    api.get("/admin/regularizations?status=pending")
-      .then(r => setPendingFix((r.data.items || []).length))
-      .catch(() => {});
+    if (isAdmin) {
+      api.get("/admin/regularizations?status=pending")
+        .then(r => setPendingFix((r.data.items || []).length))
+        .catch(() => {});
+    }
   };
 
   const firstSync = useRef(true);
@@ -66,7 +68,7 @@ export default function AdminPanel() {
     return () => { window.removeEventListener("hashchange", onHash); window.removeEventListener("popstate", onHash); };
   }, []);
 
-  useEffect(() => { refreshPending(); }, [tab]);
+  useEffect(() => { refreshPending(); }, [tab, isAdmin]);
 
   const visible = TABS.filter(t => isAdmin || !t.adminOnly);
 
@@ -128,7 +130,7 @@ export default function AdminPanel() {
             {tab === "notices" && <NoticesTab/>}
             {tab === "branches" && isAdmin && <BranchesTab/>}
             {tab === "alerts" && <AlertsTab/>}
-            {tab === "corrections" && <CorrectionsTab onChange={refreshPending}/>}
+            {tab === "corrections" && isAdmin && <CorrectionsTab onChange={refreshPending}/>}
             {tab === "selfies" && <SelfiesTab/>}
             {tab === "settings" && isAdmin && <SettingsTab/>}
             {tab === "org" && isAdmin && <OrgTab/>}

@@ -76,7 +76,9 @@ export const DayDetail = ({ day, today, onChanged, onOpenPhotos }) => {
   const st = STATUS[day.status] || STATUS.future;
   const shots = dayPhotoShots(day);
   const showPhotos = dayHasSelfies(day);
-  const canCorrect = day.date <= today && !["holiday", "weekly_off", "leave", "future", "not_joined"].includes(day.status) && day.regularization?.status !== "pending";
+  const ageDays = today && day.date ? Math.round((new Date(`${today}T00:00:00`) - new Date(`${day.date}T00:00:00`)) / 86400000) : 0;
+  const tooOld = ageDays > 7;
+  const canCorrect = day.date <= today && !tooOld && !["holiday", "weekly_off", "leave", "future", "not_joined"].includes(day.status) && day.regularization?.status !== "pending";
   const label = new Date(`${day.date}T00:00:00`).toLocaleDateString([], { weekday: "long", day: "numeric", month: "long" });
   return (
     <div className="space-y-3" data-testid="day-detail">
@@ -118,6 +120,9 @@ export const DayDetail = ({ day, today, onChanged, onOpenPhotos }) => {
           Correction {day.regularization.check_in}–{day.regularization.check_out}: <b className="capitalize">{day.regularization.status}</b>
           {day.regularization.manager_note && <span className="text-muted-foreground"> — “{day.regularization.manager_note}”</span>}
         </div>
+      )}
+      {tooOld && day.date <= today && (
+        <p className="text-xs text-muted-foreground" data-testid="correction-window">Corrections must be requested within 7 days.</p>
       )}
       {form ? <CorrectionForm day={day} onCancel={() => setForm(false)} onDone={() => { setForm(false); onChanged(); }}/>
         : canCorrect && (

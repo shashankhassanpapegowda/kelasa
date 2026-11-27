@@ -23,6 +23,8 @@ export default function LeavePage() {
   const [f, setF] = useState({ type_id: "", start_date: today(), end_date: today(), half_day: false, reason: "" });
   const [busy, setBusy] = useState(false);
   const [pushKey, setPushKey] = useState(0);
+  const [sandwich, setSandwich] = useState(false);
+  const [preview, setPreview] = useState(null);
 
   const load = async () => {
     try {
@@ -31,18 +33,29 @@ export default function LeavePage() {
         api.get("/leave/balance"),
         api.get("/leave/me"),
         api.get("/holidays"),
-        api.get("/announcements"),
+        api.get("/announcements", { params: { limit: 100 } }),
       ]);
-      setTypes(t.data.types || []);
+      const offered = (t.data.types || []).filter(x => x.code === "LV" || x.policy === "monthly_reset");
+      setTypes(offered);
       setBalances(b.data.balances || []);
+      setSandwich(!!b.data.leave_sandwich_lop);
       setRequests(r.data.requests || []);
       setHolidays((h.data.holidays || []).filter(x => x.date >= today()).slice(0, 6));
       setNotices(n.data.announcements || []);
-      setF(prev => ({ ...prev, type_id: prev.type_id || (t.data.types?.[0]?.type_id ?? "") }));
+      setF(prev => ({ ...prev, type_id: prev.type_id || (offered[0]?.type_id ?? "") }));
     } catch { toast.error("Failed to load leave data"); }
   };
 
   useEffect(() => { load(); }, []);
+
+  useEffect(() => {
+    if (!f.start_date || !f.end_date) return;
+    let cancelled = false;
+    api.get("/leave/preview", { params: { start_date: f.start_date, end_date: f.half_day ? f.start_date : f.end_date, half_day: f.half_day } })
+      .then(r => { if (!cancelled) { setPreview(r.data); setSandwich(!!r.data.leave_sandwich_lop); } })
+      .catch(() => { if (!cancelled) setPreview(null); });
+    return () => { cancelled = true; };
+  }, [f.start_date, f.end_date, f.half_day]);
 
   const apply = async () => {
     if (!f.type_id) return toast.error("Pick a leave type");
@@ -95,9 +108,9 @@ export default function LeavePage() {
                   <span className="label-overline">{b.name}</span>
                   <span className="w-2 h-2" style={{ background: b.color }}/>
                 </div>
-                <div className="stat-value mt-3">{b.entitled == null ? "∞" : b.available}</div>
-                <div className="text-[10px] font-mono text-muted-foreground mt-1">
-                  {b.entitled == null ? "no limit" : `of ${b.entitled} · ${b.used} used${b.pending ? ` · ${b.pending} pending` : ""}`}
+                <div className="stat-value mt-3">{b.available}</div>
+                <div className="text-[10px] font-mono text-muted-foreground mt-1" data-testid="leave-balance-caption">
+                  {b.available} available / {b.used} used this month{b.pending ? ` · ${b.pending} pending` : ""}
                 </div>
               </div>
             ))}
@@ -112,11 +125,8 @@ export default function LeavePage() {
               </div>
               <div className="p-4 space-y-3">
                 <div>
-                  <label className="label-overline mb-1.5 block">Leave Type</label>
-                  <select value={f.type_id} onChange={e => setF({ ...f, type_id: e.target.value })} data-testid="leave-type-select"
-                    className="w-full bg-background border border-border px-3 py-2 text-sm">
-                    {types.map(t => <option key={t.type_id} value={t.type_id}>{t.name}</option>)}
-                  </select>
+                  <label className="label-overline mb-1.5 block">Leave</label>
+                  <div className="text-sm" data-testid="leave-type-select">{types[0]?.name || "Leave"} · one paid day this month. It does not carry forward.</div>
                 </div>
                 <div className="grid grid-cols-2 gap-3">
                   <div>
@@ -136,6 +146,12 @@ export default function LeavePage() {
                   <input type="checkbox" checked={f.half_day} onChange={e => setF({ ...f, half_day: e.target.checked })} data-testid="leave-half-day"/>
                   Half day only
                 </label>
+                <p className="text-xs text-muted-foreground">One paid day each month. Further days are unpaid and are not blocked.</p>
+                {sandwich && preview?.warning_dates?.length > 0 && (
+                  <div className="text-sm border border-[#FF3B30]/40 bg-[#FF3B30]/10 px-3 py-2" data-testid="sandwich-lop-warning">
+                    These dates will be loss of pay: {preview.warning_dates.map(d => fmtDay(d)).join(", ")}. They are not taken from your paid leave.
+                  </div>
+                )}
                 <div>
                   <label className="label-overline mb-1.5 block">Reason</label>
                   <textarea value={f.reason} onChange={e => setF({ ...f, reason: e.target.value })} rows={3} data-testid="leave-reason"
@@ -162,7 +178,7 @@ export default function LeavePage() {
                         <span className={`text-[9px] font-mono uppercase tracking-wider px-1.5 py-0.5 ${STATUS_STYLE[r.status]}`}>{r.status}</span>
                       </div>
                       <div className="font-mono text-sm mt-1">
-                        {fmtDay(r.start_date)} → {fmtDay(r.end_date)} <span className="text-muted-foreground">· {r.days}d</span>
+                        {fmtDay(r.start_date)} → {fmtDay(r.end_date)} <span className="text-muted-foreground">· {r.days}d{r.paid_days != null ? ` · ${r.paid_days} paid` : ""}{r.lop_days > 0 ? ` · ${r.lop_days} unpaid` : ""}</span>
                       </div>
                       {r.reason && <div className="text-xs text-muted-foreground italic mt-1">“{r.reason}”</div>}
                       {r.status === "cancelled" && r.cancelled_by_name && (

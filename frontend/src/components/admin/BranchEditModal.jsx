@@ -4,6 +4,7 @@ import { api } from "@/lib/api";
 import { toast } from "sonner";
 import { getAccuratePosition } from "@/lib/geo";
 import BranchMapPicker from "@/components/admin/BranchMapPicker";
+import { Switch } from "@/components/ui/switch";
 import { X, MagnifyingGlass, Crosshair } from "@phosphor-icons/react";
 
 const inputCls = "w-full bg-background border border-border px-3 py-2 text-sm";
@@ -15,6 +16,7 @@ export default function BranchEditModal({ branch, others, onClose, onSaved }) {
   const [radius, setRadius] = useState(branch.radius_m || 100);
   const [query, setQuery] = useState("");
   const [busy, setBusy] = useState(false);
+  const [sandwich, setSandwich] = useState(!!branch.leave_sandwich_lop);
 
   const search = async () => {
     if (!query.trim()) return;
@@ -40,12 +42,13 @@ export default function BranchEditModal({ branch, others, onClose, onSaved }) {
   };
 
   const save = async (clear = false) => {
-    if (!clear && !pin) return toast.error("Click on the map to pin the branch location");
     const r = Number(radius);
-    if (!clear && (r < 10 || r > 10000)) return toast.error("Radius must be 10 – 10000 metres");
+    if (!clear && pin && (r < 10 || r > 10000)) return toast.error("Radius must be 10 – 10000 metres");
     setBusy(true);
     try {
-      const body = { name, address, ...(clear ? { clear_geofence: true } : { lat: pin.lat, lng: pin.lng, radius_m: Math.round(r) }) };
+      const body = { name, address, leave_sandwich_lop: sandwich };
+      if (clear) body.clear_geofence = true;
+      else if (pin) Object.assign(body, { lat: pin.lat, lng: pin.lng, radius_m: Math.round(r) });
       await api.patch(`/admin/org/sites/${branch.unit_id}`, body);
       toast.success(clear ? "Geofence removed" : `${name} geofence saved · ${Math.round(r)} m`);
       onSaved();
@@ -99,6 +102,13 @@ export default function BranchEditModal({ branch, others, onClose, onSaved }) {
             <input type="range" min="10" max="2000" step="10" value={Math.min(Number(radius) || 10, 2000)} onChange={e => setRadius(e.target.value)}
               className="w-full accent-[#0047FF]" data-testid="branch-radius-slider"/>
             {pin && <div className="text-[10px] font-mono text-muted-foreground mt-1" data-testid="branch-pin-coords">{pin.lat.toFixed(6)}, {pin.lng.toFixed(6)}</div>}
+          </div>
+          <div className="flex items-center justify-between gap-3 border border-border px-3 py-3">
+            <div>
+              <label htmlFor="branch-sandwich-lop" className="text-sm font-medium">Holiday sandwich is loss of pay</label>
+              <p className="text-[11px] text-muted-foreground mt-0.5">Saturdays, Mondays, and the day before, of and after a holiday are unpaid if the employee does not punch in. Other branches stay unchanged.</p>
+            </div>
+            <Switch id="branch-sandwich-lop" checked={sandwich} onCheckedChange={setSandwich} data-testid="branch-sandwich-lop"/>
           </div>
           <div className="flex items-center gap-2 pt-1 flex-wrap">
             <button onClick={() => save(false)} disabled={busy} data-testid="branch-save-btn"

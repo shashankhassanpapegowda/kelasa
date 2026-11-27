@@ -13,7 +13,10 @@ from test_web_push import fake_sub, sub_exists, wait_gone
 
 ADMIN = {"Authorization": "Bearer test_session_admin_001"}
 SUB = {"Authorization": "Bearer test_session_subadmin_001"}
-LOP = "lt_38566c869f"
+def paid_leave_id(headers):
+    r = requests.get(f"{BASE_URL}/api/leave/types", headers=headers)
+    assert r.status_code == 200, r.text
+    return next(t["type_id"] for t in r.json()["types"] if t["code"] == "LV")
 INSIDE = {"lat": 12.9720, "lng": 77.5946, "accuracy": 10}
 OUTSIDE = {"lat": 12.99, "lng": 77.5946, "accuracy": 10}
 LOG = "/var/log/supervisor/backend.err.log"
@@ -112,7 +115,7 @@ class TestEmployeePushEndpoints:
 # ---- leave decision -> employee push ----
 class TestLeaveDecisionPush:
     def _apply(self, emp, start, end):
-        r = requests.post(f"{BASE_URL}/api/leave/request", json={"type_id": LOP, "start_date": start, "end_date": end,
+        r = requests.post(f"{BASE_URL}/api/leave/request", json={"type_id": paid_leave_id(emp), "start_date": start, "end_date": end,
                                                                  "half_day": False, "reason": "TEST_iter12"}, headers=emp)
         assert r.status_code == 200, r.text
         return r.json()["request"]["leave_id"]

@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import { toast } from "sonner";
 import { fmtDay } from "@/lib/format";
-import { Check, X, Hourglass, Plus, Trash, CaretDown } from "@phosphor-icons/react";
+import { Check, X, Hourglass } from "@phosphor-icons/react";
 
 const STATUSES = ["pending", "approved", "rejected", "all"];
 const STATUS_STYLE = {
@@ -84,7 +84,7 @@ export default function LeaveTab({ isAdmin, currentUserId, onDecided }) {
                   </div>
                   <div className="text-xs text-muted-foreground mt-0.5">{r.email}{r.department ? ` · ${r.department}` : ""}</div>
                   <div className="font-mono text-sm mt-1">
-                    {fmtDay(r.start_date)} → {fmtDay(r.end_date)} <span className="text-muted-foreground">· {r.days}d{r.half_day ? " (half)" : ""}</span>
+                    {fmtDay(r.start_date)} → {fmtDay(r.end_date)} <span className="text-muted-foreground">· {r.days}d{r.half_day ? " (half)" : ""}{r.lop_days > 0 ? ` · ${r.lop_days} unpaid` : ""}</span>
                   </div>
                   {r.reason && <div className="text-xs mt-1 text-muted-foreground italic">“{r.reason}”</div>}
                   {r.decided_by_name && (
@@ -165,86 +165,15 @@ const TabBtn = ({ active, onClick, children, testid }) => (
   </button>
 );
 
-function LeaveTypes({ onChange }) {
-  const [types, setTypes] = useState([]);
-  const [open, setOpen] = useState(false);
-  const [f, setF] = useState({ name: "", code: "", policy: "yearly", annual_quota: 12, monthly_accrual: 0, paid: true, color: "#0047FF" });
-
-  const load = async () => {
-    const res = await api.get("/leave/types");
-    setTypes(res.data.types || []);
-  };
-  useEffect(() => { load(); }, []);
-
-  const add = async () => {
-    try {
-      await api.post("/admin/leave-types", {
-        ...f,
-        annual_quota: Number(f.annual_quota) || 0,
-        monthly_accrual: Number(f.monthly_accrual) || 0,
-      });
-      toast.success("Leave type added");
-      setOpen(false);
-      setF({ name: "", code: "", policy: "yearly", annual_quota: 12, monthly_accrual: 0, paid: true, color: "#0047FF" });
-      load(); onChange?.();
-    } catch (e) { toast.error(e?.response?.data?.detail || "Could not add"); }
-  };
-
-  const remove = async (t) => {
-    if (!window.confirm(`Retire "${t.name}"? Existing records stay intact.`)) return;
-    try { await api.delete(`/admin/leave-types/${t.type_id}`); toast.success("Retired"); load(); onChange?.(); }
-    catch { toast.error("Could not retire"); }
-  };
-
+function LeaveTypes() {
   return (
-    <div className="mt-4 border border-border bg-card" data-testid="leave-types">
-      <div className="p-4 border-b border-border flex items-center justify-between">
+    <div className="mt-4 border border-border bg-card max-w-xl" data-testid="leave-types">
+      <div className="p-4 border-b border-border">
         <span className="label-overline">Leave Policy</span>
-        <button onClick={() => setOpen(o => !o)} data-testid="add-leave-type-btn"
-          className="text-xs label-overline inline-flex items-center gap-1.5 border border-border px-2 py-1 hover:border-foreground">
-          {open ? <CaretDown size={12} weight="bold"/> : <Plus size={12} weight="bold"/>} New Type
-        </button>
       </div>
-      {open && (
-        <div className="p-4 border-b border-border grid sm:grid-cols-3 gap-3 bg-secondary/20">
-          <input placeholder="Name e.g. Maternity Leave" value={f.name} onChange={e => setF({ ...f, name: e.target.value })} className="bg-background border border-border px-3 py-2 text-sm" data-testid="lt-name"/>
-          <input placeholder="Code e.g. ML" value={f.code} onChange={e => setF({ ...f, code: e.target.value })} className="bg-background border border-border px-3 py-2 text-sm uppercase" data-testid="lt-code"/>
-          <select value={f.policy} onChange={e => setF({ ...f, policy: e.target.value })} className="bg-background border border-border px-3 py-2 text-sm" data-testid="lt-policy">
-            <option value="yearly">Yearly quota</option>
-            <option value="monthly">Monthly accrual</option>
-            <option value="none">No balance limit</option>
-          </select>
-          {f.policy === "yearly" && (
-            <input type="number" step="0.5" placeholder="Days per year" value={f.annual_quota} onChange={e => setF({ ...f, annual_quota: e.target.value })} className="bg-background border border-border px-3 py-2 text-sm font-mono" data-testid="lt-quota"/>
-          )}
-          {f.policy === "monthly" && (
-            <input type="number" step="0.5" placeholder="Days per month" value={f.monthly_accrual} onChange={e => setF({ ...f, monthly_accrual: e.target.value })} className="bg-background border border-border px-3 py-2 text-sm font-mono" data-testid="lt-accrual"/>
-          )}
-          <label className="flex items-center gap-2 text-sm">
-            <input type="checkbox" checked={f.paid} onChange={e => setF({ ...f, paid: e.target.checked })} data-testid="lt-paid"/> Paid leave
-          </label>
-          <button onClick={add} className="bg-foreground text-background px-4 py-2 text-sm font-medium hover:bg-primary" data-testid="save-leave-type">Add Type</button>
-        </div>
-      )}
-      <div className="divide-y divide-border">
-        {types.map(t => (
-          <div key={t.type_id} className="p-4 flex items-center gap-3" data-testid={`leave-type-${t.type_id}`}>
-            <span className="w-2.5 h-2.5" style={{ background: t.color }}/>
-            <div className="flex-1">
-              <div className="text-sm font-medium">{t.name} <span className="font-mono text-xs text-muted-foreground">· {t.code}</span></div>
-              <div className="text-[11px] text-muted-foreground font-mono mt-0.5">
-                {t.policy === "yearly" && `${t.annual_quota} days / year`}
-                {t.policy === "monthly" && `${t.monthly_accrual} days / month accrual`}
-                {t.policy === "none" && "No balance tracking"}
-                {t.paid ? " · paid" : " · unpaid"}
-              </div>
-            </div>
-            <button onClick={() => remove(t)} className="text-[10px] label-overline text-muted-foreground hover:text-[#FF3B30] inline-flex items-center gap-1" data-testid={`delete-leave-type-${t.type_id}`}>
-              <Trash size={11} weight="bold"/> RETIRE
-            </button>
-          </div>
-        ))}
-        {types.length === 0 && <div className="p-8 text-sm text-muted-foreground text-center">No leave types configured.</div>}
+      <div className="p-4 space-y-2 text-sm">
+        <p className="font-medium">One paid leave day per calendar month.</p>
+        <p className="text-muted-foreground">It does not carry forward. An unused day lapses at the end of the month. Days beyond that one paid day are unpaid. Older casual, sick and earned leave records stay readable and still count in past payroll.</p>
       </div>
     </div>
   );

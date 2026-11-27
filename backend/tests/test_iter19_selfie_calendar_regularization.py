@@ -4,6 +4,7 @@ import uuid
 import requests
 import pytest
 from datetime import datetime, timezone, timedelta
+from zoneinfo import ZoneInfo
 from pymongo import MongoClient
 from conftest import TINY_JPEG_B64
 
@@ -37,6 +38,11 @@ def tmp_user():
 
 def day(cal, d):
     return next(x for x in cal["days"] if x["date"] == d)
+
+
+def recent(days_ago):
+    """A calendar day inside the 7-day correction window (Asia/Kolkata)."""
+    return (datetime.now(ZoneInfo("Asia/Kolkata")).date() - timedelta(days=days_ago)).isoformat()
 
 
 # ---- Selfie-only check-in/out ----
@@ -109,8 +115,12 @@ class TestCalendar:
 class TestRegularization:
     def test_validation(self, tmp_user):
         h = tmp_user["h"]
-        p = lambda **k: requests.post(f"{API}/regularizations", json={"date": "2026-11-05", "check_in": "09:00", "check_out": "18:00", "reason": "Forgot to punch in", **k}, headers=h)
-        assert p(date="2026-12-20").status_code == 400
+        day = recent(2)
+        future = (datetime.now(ZoneInfo("Asia/Kolkata")).date() + timedelta(days=3)).isoformat()
+        too_old = recent(8)
+        p = lambda **k: requests.post(f"{API}/regularizations", json={"date": day, "check_in": "09:00", "check_out": "18:00", "reason": "Forgot to punch in", **k}, headers=h)
+        assert p(date=future).status_code == 400
+        assert p(date=too_old).status_code == 400
         assert p(check_out="08:00").status_code == 400
         assert p(check_out="09:00").status_code == 400
         assert p(reason="no").status_code == 400
@@ -128,31 +138,38 @@ class TestRegularization:
     def test_employee_cannot_decide_or_list(self, tmp_user):
         assert requests.get(f"{API}/admin/regularizations", headers=tmp_user["h"]).status_code == 403
 
-    def test_subadmin_scope_and_decide(self, tmp_user):
+    def test_subadmin_cannot_decide_admin_can(self, tmp_user):
         h = tmp_user["h"]
-        r = requests.post(f"{API}/regularizations", json={"date": "2026-11-03", "check_in": "09:30", "check_out": "18:00", "reason": "Missed check out at site"}, headers=h)
-        assert r.status_code == 200
+        when = recent(3)
+        DB.attendance.insert_one({
+            "record_id": f"att_TEST_{uuid.uuid4().hex[:8]}", "user_id": tmp_user["uid"], "date": when,
+            "check_in": f"{when}T03:30:00+00:00", "check_out": f"{when}T12:30:00+00:00", "status": "off_duty",
+            "net_work_minutes": 540, "duration_minutes": 540, "auto_closed": True, "auto_close_reason": "missed checkout",
+            "breaks": [], "total_break_minutes": 0, "late_by_minutes": 0,
+        })
+        r = requests.post(f"{API}/regularizations", json={"date": when, "check_in": "09:30", "check_out": "18:00", "reason": "Missed check out at site"}, headers=h)
+        assert r.status_code == 200, r.text
         rid = r.json()["request"]["request_id"]
         items = requests.get(f"{API}/admin/regularizations", params={"status": "pending"}, headers=SUB).json()["items"]
         assert any(i["request_id"] == rid and i["name"] == "TEST_Iter19 Emp" for i in items)
         assert all(DB.users.find_one({"user_id": i["user_id"]}).get("department") != "Administration" or i["user_id"] == "user_testsub01"
                    for i in requests.get(f"{API}/admin/regularizations", params={"status": "all"}, headers=SUB).json()["items"])
-        # reject without note
-        r = requests.post(f"{API}/admin/regularizations/{rid}/decide", json={"decision": "rejected"}, headers=SUB)
-        assert r.status_code == 400
-        r = requests.post(f"{API}/admin/regularizations/{rid}/decide", json={"decision": "rejected", "note": "  "}, headers=SUB)
-        assert r.status_code == 400
-        old = DB.attendance.find_one({"user_id": tmp_user["uid"], "date": "2026-11-03"})
-        r = requests.post(f"{API}/admin/regularizations/{rid}/decide", json={"decision": "approved", "note": "ok"}, headers=SUB)
+        # Corrections are admin-only. A sub-admin is refused before the note is checked.
+        assert requests.post(f"{API}/admin/regularizations/{rid}/decide", json={"decision": "rejected"}, headers=SUB).status_code == 403
+        assert requests.post(f"{API}/admin/regularizations/{rid}/decide", json={"decision": "approved"}, headers=SUB).status_code == 403
+        assert requests.post(f"{API}/admin/regularizations/{rid}/decide", json={"decision": "rejected"}, headers=ADMIN).status_code == 400
+        assert requests.post(f"{API}/admin/regularizations/{rid}/decide", json={"decision": "rejected", "note": "  "}, headers=ADMIN).status_code == 400
+        old = DB.attendance.find_one({"user_id": tmp_user["uid"], "date": when})
+        r = requests.post(f"{API}/admin/regularizations/{rid}/decide", json={"decision": "approved", "note": "ok"}, headers=ADMIN)
         assert r.status_code == 200, r.text
-        assert requests.post(f"{API}/admin/regularizations/{rid}/decide", json={"decision": "approved"}, headers=SUB).status_code == 400
-        rec = DB.attendance.find_one({"user_id": tmp_user["uid"], "date": "2026-11-03"})
+        assert requests.post(f"{API}/admin/regularizations/{rid}/decide", json={"decision": "approved"}, headers=ADMIN).status_code == 400
+        rec = DB.attendance.find_one({"user_id": tmp_user["uid"], "date": when})
         assert rec["regularized"] is True and rec["auto_closed"] is False
         assert rec["original_check_in"] == old["check_in"] and rec["original_check_out"] == old["check_out"]
-        assert rec["check_in"].startswith("2026-11-03T04:00") and rec["net_work_minutes"] == 510
+        assert rec["check_in"].startswith(f"{when}T04:00") and rec["net_work_minutes"] == 510
         assert rec["late_by_minutes"] == 15  # 15 min grace
-        c = requests.get(f"{API}/me/calendar", params={"month": MONTH}, headers=h).json()
-        d = day(c, "2026-11-03")
+        c = requests.get(f"{API}/me/calendar", params={"month": when[:7]}, headers=h).json()
+        d = day(c, when)
         assert d["status"] == "late" and d["regularization"]["status"] == "approved"
         logs = list(DB.activity_log.find({"action": {"$in": ["regularization_requested", "regularization_approved"]}, "target_name": "TEST_Iter19 Emp"})) \
             if "activity_log" in DB.list_collection_names() else []
@@ -160,21 +177,23 @@ class TestRegularization:
 
     def test_approve_creates_record_and_reject(self, tmp_user):
         h = tmp_user["h"]
-        rid = requests.post(f"{API}/regularizations", json={"date": "2026-11-06", "check_in": "09:00", "check_out": "12:00", "reason": "Phone died, no punch"}, headers=h).json()["request"]["request_id"]
+        half = recent(4)
+        rid = requests.post(f"{API}/regularizations", json={"date": half, "check_in": "09:00", "check_out": "12:00", "reason": "Phone died, no punch"}, headers=h).json()["request"]["request_id"]
         assert requests.post(f"{API}/admin/regularizations/{rid}/decide", json={"decision": "approved"}, headers=ADMIN).status_code == 200
-        rec = DB.attendance.find_one({"user_id": tmp_user["uid"], "date": "2026-11-06"})
+        rec = DB.attendance.find_one({"user_id": tmp_user["uid"], "date": half})
         assert rec and rec["regularized"] and rec["net_work_minutes"] == 180
-        c = requests.get(f"{API}/me/calendar", params={"month": MONTH}, headers=h).json()
-        assert day(c, "2026-11-06")["status"] == "half_day"
-        rid2 = requests.post(f"{API}/regularizations", json={"date": "2026-11-09", "check_in": "09:00", "check_out": "18:00", "reason": "Was on site visit"}, headers=h).json()["request"]["request_id"]
+        c = requests.get(f"{API}/me/calendar", params={"month": half[:7]}, headers=h).json()
+        assert day(c, half)["status"] == "half_day"
+        rejected = recent(5)
+        rid2 = requests.post(f"{API}/regularizations", json={"date": rejected, "check_in": "09:00", "check_out": "18:00", "reason": "Was on site visit"}, headers=h).json()["request"]["request_id"]
         r = requests.post(f"{API}/admin/regularizations/{rid2}/decide", json={"decision": "rejected", "note": "No proof"}, headers=ADMIN)
         assert r.status_code == 200
-        assert DB.attendance.find_one({"user_id": tmp_user["uid"], "date": "2026-11-09"}) is None
+        assert DB.attendance.find_one({"user_id": tmp_user["uid"], "date": rejected}) is None
         rej = requests.get(f"{API}/admin/regularizations", params={"status": "rejected"}, headers=ADMIN).json()["items"]
         assert any(i["request_id"] == rid2 and i["manager_note"] == "No proof" for i in rej)
 
     def test_subadmin_cannot_decide_own(self):
-        r = requests.post(f"{API}/regularizations", json={"date": "2026-11-02", "check_in": "09:00", "check_out": "18:00", "reason": "TEST_ sub own request"}, headers=SUB)
+        r = requests.post(f"{API}/regularizations", json={"date": recent(1), "check_in": "09:00", "check_out": "18:00", "reason": "TEST_ sub own request"}, headers=SUB)
         assert r.status_code == 200, r.text
         rid = r.json()["request"]["request_id"]
         try:
