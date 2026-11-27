@@ -3,56 +3,8 @@ import { api } from "@/lib/api";
 import { toast } from "sonner";
 import { fmtTime, fmtDuration } from "@/lib/format";
 import { STATUS } from "./CalendarGrid";
-import AuthPhoto from "@/components/AuthPhoto";
-import { Coffee, SignIn, SignOut, Warning, PencilSimple, X } from "@phosphor-icons/react";
-
-const PURGED = "Photo deleted after retention period";
-
-/** Thumbnail for one punch. The image is fetched only when this day panel is mounted. */
-const SelfieShot = ({ path, label, time, purged, empty }) => {
-  const [open, setOpen] = useState(false);
-  const slug = label.toLowerCase().replace(/\s+/g, "-");
-  return (
-    <div className="flex-1 min-w-0" data-testid={`day-photo-${slug}`}>
-      <div className="flex items-baseline justify-between mb-1 gap-2">
-        <span className="label-overline">{label}</span>
-        {time && <span className="font-mono text-[11px] text-muted-foreground">{fmtTime(time)}</span>}
-      </div>
-      {path ? (
-        <button type="button" onClick={() => setOpen(true)} className="block w-full text-left" data-testid={`day-photo-open-${slug}`} aria-label={`Enlarge ${label} selfie`}>
-          <AuthPhoto path={path} alt={`${label} selfie at ${time ? fmtTime(time) : ""}`} className="w-full aspect-[4/3] object-cover bg-black" fallback={<div className="w-full aspect-[4/3] bg-secondary"/>}/>
-        </button>
-      ) : (
-        <div className="w-full aspect-[4/3] bg-secondary grid place-items-center text-[11px] text-muted-foreground text-center px-2 leading-snug" data-testid={purged ? "day-photo-purged" : "day-photo-empty"}>
-          {purged ? PURGED : empty}
-        </div>
-      )}
-      {open && path && (
-        <div className="fixed inset-0 z-[1000] bg-black/80 backdrop-blur-sm grid place-items-center p-4" onClick={() => setOpen(false)} data-testid="day-photo-lightbox" role="dialog" aria-label={`${label} selfie`}>
-          <div className="max-w-lg w-full" onClick={(e) => e.stopPropagation()}>
-            <div className="flex items-center justify-between text-white mb-2">
-              <span className="text-sm">{label}{time ? <> · <span className="font-mono">{fmtTime(time)}</span></> : null}</span>
-              <button type="button" onClick={() => setOpen(false)} className="p-2" data-testid="day-photo-lightbox-close" aria-label="Close photo"><X size={18} weight="bold"/></button>
-            </div>
-            <AuthPhoto path={path} alt={`${label} selfie`} className="w-full max-h-[80vh] object-contain bg-black" fallback={<div className="w-full aspect-[4/3] bg-secondary"/>}/>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-};
-
-const SessionPhotos = ({ s }) => {
-  const purgedIn = !!s.photos_purged_at && !s.check_in_photo_path;
-  const purgedOut = !!s.photos_purged_at && !s.check_out_photo_path && !!s.check_out;
-  if (!s.check_in_photo_path && !s.check_out_photo_path && !s.photos_purged_at) return null;
-  return (
-    <div className="flex gap-2" data-testid={`day-photos-${s.record_id}`}>
-      <SelfieShot path={s.check_in_photo_path} label="Check-in" time={s.check_in} purged={purgedIn} empty="No photo"/>
-      <SelfieShot path={s.check_out_photo_path} label="Check-out" time={s.check_out} purged={purgedOut} empty={s.check_out ? "No photo" : "Not checked out"}/>
-    </div>
-  );
-};
+import { dayHasSelfies, dayPhotoShots } from "./dayPhotos.mjs";
+import { Camera, Coffee, SignIn, SignOut, Warning, PencilSimple, X } from "@phosphor-icons/react";
 
 const hhmm = (iso) => (iso ? new Date(iso).toTimeString().slice(0, 5) : "");
 
@@ -110,19 +62,20 @@ const Session = ({ s }) => (
       {s.regularized && <span className="text-[#1D4ED8]">corrected by manager</span>}
       {s.auto_closed && !s.regularized && <span className="text-[#A16207] inline-flex items-center gap-1"><Warning size={12} weight="fill"/> missed check-out — closed automatically</span>}
     </div>
-    <SessionPhotos s={s}/>
     {(s.breaks || []).length > 0 && (
-      <div className="text-[11px] font-mono text-muted-foreground">
-        {s.breaks.map((b, i) => <span key={i} className="mr-3">break {fmtTime(b.start)}–{b.end ? fmtTime(b.end) : "…"}</span>)}
+      <div className="text-[11px] font-mono text-muted-foreground" data-testid={`day-breaks-${s.record_id}`}>
+        {s.breaks.map((b, i) => <span key={b.break_id || i} className="mr-3">break {fmtTime(b.start)}–{b.end ? fmtTime(b.end) : "…"}</span>)}
       </div>
     )}
   </div>
 );
 
-export const DayDetail = ({ day, today, onChanged }) => {
+export const DayDetail = ({ day, today, onChanged, onOpenPhotos }) => {
   const [form, setForm] = useState(false);
   if (!day) return null;
   const st = STATUS[day.status] || STATUS.future;
+  const shots = dayPhotoShots(day);
+  const showPhotos = dayHasSelfies(day);
   const ageDays = today && day.date ? Math.round((new Date(`${today}T00:00:00`) - new Date(`${day.date}T00:00:00`)) / 86400000) : 0;
   const tooOld = ageDays > 7;
   const canCorrect = day.date <= today && !tooOld && !["holiday", "weekly_off", "leave", "future", "not_joined"].includes(day.status) && day.regularization?.status !== "pending";
@@ -145,6 +98,22 @@ export const DayDetail = ({ day, today, onChanged }) => {
       )}
       {day.sessions.length ? day.sessions.map(s => <Session key={s.record_id} s={s}/>)
         : <div className="text-sm text-muted-foreground border border-dashed border-border p-4 text-center">No punches on this day.</div>}
+      {showPhotos && (
+        <div className="space-y-2" data-testid="day-photo-triggers">
+          <button type="button" onClick={() => onOpenPhotos?.(0)} data-testid="day-photos-open"
+            className="w-full min-h-11 border border-border py-2 text-sm inline-flex items-center justify-center gap-2 hover:bg-secondary">
+            <Camera size={16} weight="bold"/> View selfies
+          </button>
+          <div className="flex gap-2 overflow-x-auto pb-1">
+            {shots.map((s) => (
+              <button key={s.id} type="button" onClick={() => onOpenPhotos?.(s.index)} data-testid={`day-photo-open-${s.index}`}
+                className="shrink-0 min-h-11 px-3 border border-border text-xs inline-flex items-center gap-1.5 hover:bg-secondary">
+                <Camera size={14} weight="bold"/> {s.label}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
       {day.sessions.length > 0 && <div className="text-sm flex justify-between"><span className="text-muted-foreground">Total worked</span><span className="font-mono font-semibold" data-testid="day-total">{fmtDuration(day.net_work_minutes)}</span></div>}
       {day.regularization && (
         <div className="text-xs border border-border p-2" data-testid="day-correction-status">
