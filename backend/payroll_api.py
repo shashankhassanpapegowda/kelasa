@@ -13,7 +13,7 @@ import logging
 import os
 import uuid
 import zipfile
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 from typing import Optional
@@ -34,8 +34,10 @@ from payroll_calc import (
 from payroll_crypto import decrypt_json, encrypt_json
 from payroll_excel import adjustment_rows, bank_rows, register_workbook
 from payroll_import import compare_totals, parse_workbook, structures_from_sheet
+from attendance_calc import shift_minutes
 from payroll_ndp import days_paid
 from payroll_pdf import default_template, render_payslip
+from work_timing import resolve_day
 
 logger = logging.getLogger(__name__)
 IST = ZoneInfo("Asia/Kolkata")
@@ -480,10 +482,56 @@ async def _previous_atc(user_id: str, month: str):
     return (snap.get("result") or {}).get("atc")
 
 
+async def _day_windows(user: dict, first: date, last: date) -> Optional[dict]:
+    """Per-day scheduled start/end. None when the employee has no saved timing at all."""
+    uid = user["user_id"]
+    sched = await _db().work_schedules.find_one({"user_id": uid}, {"_id": 0})
+    dates = []
+    cur = first
+    while cur <= last:
+        dates.append(cur.isoformat())
+        cur += timedelta(days=1)
+    found = await _db().work_schedule_overrides.find(
+        {"user_id": uid, "date": {"$in": dates}}, {"_id": 0}
+    ).to_list(len(dates) or 1)
+    if not sched and not found:
+        return None
+    overrides = {item["date"]: item for item in found}
+    windows = {}
+    cur = first
+    while cur <= last:
+        timing = resolve_day(cur, sched, overrides.get(cur.isoformat()), user.get("shift_start"), user.get("shift_end"))
+        if timing.uses_schedule:
+            windows[cur.isoformat()] = (timing.start, timing.end) if timing.working else (None, None)
+        cur += timedelta(days=1)
+    return windows
+
+
+def _worked_minutes(sessions_by_date: dict, day_windows, shift_start, shift_end) -> dict:
+    net = breaks = overtime = 0
+    for iso, sessions in sessions_by_date.items():
+        day_net = 0
+        for session in sessions:
+            day_net += int(session.get("net_work_minutes") or 0)
+            breaks += int(session.get("total_break_minutes") or 0)
+        net += day_net
+        if day_windows is not None and iso in day_windows:
+            start, end = day_windows[iso]
+        else:
+            start, end = shift_start, shift_end
+        planned = shift_minutes(start, end) or 0
+        if planned:
+            overtime += max(0, day_net - planned)
+    return {"net_work_minutes": net, "total_break_minutes": breaks, "overtime_minutes": overtime}
+
+
 async def _attendance_for(user: dict, profile: dict, month: str, nwd: Decimal) -> dict:
     year, mon = _month_parts(month)
     first = date(year, mon, 1)
     last = date(year, mon, days_in_month(year, mon))
+    # One day either side so a holiday on the boundary still sandwiches the edge of the month.
+    wide_from = (first - timedelta(days=1)).isoformat()
+    wide_to = (last + timedelta(days=1)).isoformat()
     f, t = first.isoformat(), last.isoformat()
     uid = user["user_id"]
     records = await _db().attendance.find({"user_id": uid, "date": {"$gte": f, "$lte": t}}, {"_id": 0}).to_list(2000)
@@ -493,7 +541,7 @@ async def _attendance_for(user: dict, profile: dict, month: str, nwd: Decimal) -
             continue
         by_date.setdefault(rec["date"], []).append(rec)
     holidays = []
-    for holiday in await _db().holidays.find({"date": {"$gte": f, "$lte": t}}, {"_id": 0}).to_list(500):
+    for holiday in await _db().holidays.find({"date": {"$gte": wide_from, "$lte": wide_to}}, {"_id": 0}).to_list(500):
         if holiday_applies(holiday, user.get("site")):
             holidays.append(holiday["date"])
     leaves = await _db().leave_requests.find(
@@ -502,8 +550,15 @@ async def _attendance_for(user: dict, profile: dict, month: str, nwd: Decimal) -
     types = {item["type_id"]: item for item in await _db().leave_types.find({}, {"_id": 0}).to_list(200)}
     for leave in leaves:
         kind = types.get(leave.get("type_id")) or {}
-        leave["paid"] = kind.get("paid", True)
-        leave["leave_type"] = leave.get("type_name") or kind.get("name")
+        # Historical requests have no paid_dates. Keep their stored type, and don't
+        # overwrite an explicit paid flag already classified onto the request.
+        if "paid" not in leave or leave.get("paid") is None:
+            leave["paid"] = kind.get("paid", True)
+        leave["leave_type"] = leave.get("type_name") or kind.get("name") or leave.get("leave_type")
+    site = None
+    if user.get("site"):
+        site = await _db().sites.find_one({"name": user["site"]}, {"_id": 0, "leave_sandwich_lop": 1})
+    windows = await _day_windows(user, first, last)
     today = datetime.now(IST).date()
     breakdown = days_paid(
         year=year, month=mon, nwd=nwd, today=today,
@@ -513,7 +568,10 @@ async def _attendance_for(user: dict, profile: dict, month: str, nwd: Decimal) -
         holidays=holidays, sessions_by_date=by_date, leaves=leaves,
         has_shift=bool(user.get("shift_start")), pending_invite=bool(user.get("pending_invite")),
         shift_start=user.get("shift_start"), shift_end=user.get("shift_end"),
+        sandwich_enabled=bool(site and site.get("leave_sandwich_lop")),
+        day_windows=windows,
     )
+    breakdown.update(_worked_minutes(by_date, windows, user.get("shift_start"), user.get("shift_end")))
     return freeze(breakdown)
 
 

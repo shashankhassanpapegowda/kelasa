@@ -10,6 +10,8 @@ import { api } from "@/lib/api";
 import { toast } from "sonner";
 import { useAuth } from "@/lib/auth";
 import { getAccuratePosition, startLiveWatch } from "@/lib/geo";
+import { Link } from "react-router-dom";
+import AbsentToday from "@/components/AbsentToday";
 import { Camera, Clock, Path as PathIcon, MapPin, ArrowsClockwise, GpsFix, WarningCircle, Coffee, ArrowCounterClockwise, Megaphone, PushPin } from "@phosphor-icons/react";
 
 const PING_INTERVAL_MS = 30_000;
@@ -96,8 +98,11 @@ export default function Dashboard() {
   }, []);
 
   useEffect(() => {
-    api.get("/announcements?limit=1")
-      .then(r => setNotice((r.data.announcements || [])[0] || null))
+    api.get("/announcements")
+      .then(r => {
+        const items = r.data.announcements || [];
+        setNotice(items.find(a => a.pinned) || items[0] || null);
+      })
       .catch(() => {});
   }, []);
 
@@ -251,10 +256,15 @@ export default function Dashboard() {
               <div className="min-w-0">
                 <div className="text-sm font-medium">{notice.title}</div>
                 {notice.body && <p className="text-sm text-muted-foreground mt-0.5 line-clamp-2">{notice.body}</p>}
-                <div className="text-[10px] font-mono text-muted-foreground mt-1">{notice.author_name}</div>
+                <div className="text-[10px] font-mono text-muted-foreground mt-1 flex items-center gap-2">
+                  <span>{notice.author_name}</span>
+                  <Link to="/leave" className="underline" data-testid="notice-see-all">See all</Link>
+                </div>
               </div>
             </div>
           )}
+
+          <div className="mt-6"><AbsentToday heading="Absent today · your branch"/></div>
 
           <div className="mt-6 grid lg:grid-cols-3 gap-0 border border-border bg-card">
             <div className="lg:col-span-2 p-6 sm:p-8 border-b lg:border-b-0 lg:border-r border-border">

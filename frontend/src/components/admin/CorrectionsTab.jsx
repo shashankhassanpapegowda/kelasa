@@ -20,6 +20,10 @@ export default function CorrectionsTab({ onChange }) {
   useEffect(() => { load(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [status]);
 
   const decide = async (r, decision) => {
+    if (decision === "rejected" && !(notes[r.request_id] || "").trim()) {
+      toast.error("Add a note explaining why it was rejected");
+      return;
+    }
     setBusy(r.request_id);
     try {
       await api.post(`/admin/regularizations/${r.request_id}/decide`, { decision, note: notes[r.request_id] || "" });

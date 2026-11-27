@@ -30,6 +30,14 @@ NOSITE_TOKEN = f"TEST_sess_nosite_{uuid.uuid4().hex[:6]}"
 NOSITE_UID = f"TEST_user_nosite_{uuid.uuid4().hex[:6]}"
 
 
+def leave_type_id():
+    r = requests.get(f"{BASE_URL}/api/leave/types", headers=EMP)
+    assert r.status_code == 200, r.text
+    match = next((t for t in r.json()["types"] if t["code"] == "LV"), None)
+    assert match, r.text
+    return match["type_id"]
+
+
 def add(headers, date, name, branches):
     r = requests.post(f"{BASE_URL}/api/admin/holidays", headers=headers, json={"date": date, "name": name, "branches": branches})
     if r.status_code == 200:
@@ -170,7 +178,7 @@ class TestLeaveCount:
         add(ADMIN, "2027-06-08", "TEST_LV_TY", ["Tumkur Yard"])
         add(ADMIN, "2027-06-09", "TEST_LV_BH", ["Bengaluru HQ"])
         r = requests.post(f"{BASE_URL}/api/leave/request", headers=EMP, json={
-            "type_id": "lt_38566c869f", "start_date": "2027-06-07", "end_date": "2027-06-10", "reason": "TEST_branch holiday"})
+            "type_id": leave_type_id(), "start_date": "2027-06-07", "end_date": "2027-06-10", "reason": "TEST_branch holiday"})
         assert r.status_code == 200, r.text
         body = r.json()
         req = body.get("request") or body.get("leave") or body
@@ -184,7 +192,7 @@ class TestLeaveCount:
     def test_leave_all_branch_holiday_rejected(self):
         add(ADMIN, "2027-06-15", "TEST_LV_BH2", ["Bengaluru HQ"])
         r = requests.post(f"{BASE_URL}/api/leave/request", headers=EMP, json={
-            "type_id": "lt_38566c869f", "start_date": "2027-06-15", "end_date": "2027-06-15"})
+            "type_id": leave_type_id(), "start_date": "2027-06-15", "end_date": "2027-06-15"})
         assert r.status_code == 400
 
 

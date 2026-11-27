@@ -6,6 +6,7 @@ import PhotoModal from "@/components/admin/PhotoModal";
 import CelebrationsCard from "@/components/CelebrationsCard";
 import CelebrationBanner from "@/components/CelebrationBanner";
 import { fmtTime, fmtDuration, fmtAcc, accClass, fmtDay, today } from "@/lib/format";
+import AbsentToday from "@/components/AbsentToday";
 import { Users, Pulse, Clock, CheckSquare, WarningCircle, AirplaneTilt, Hourglass } from "@phosphor-icons/react";
 import { AreaChart, Area, BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Legend } from "recharts";
 
@@ -45,6 +46,8 @@ export default function OverviewTab() {
         <Stat label="Leave Pending" value={stats?.pending_leave ?? "—"} icon={<Hourglass size={18} weight="bold"/>} testid="stat-pending-leave"/>
         <Stat label="Work Hrs Today" value={fmtDuration(stats?.total_work_minutes_today)} icon={<Clock size={18} weight="bold"/>} testid="stat-workhours"/>
       </div>
+
+      <div className="mt-6"><AbsentToday heading="Absent today"/></div>
 
       <div className="mt-6 border border-border bg-card" data-testid="attendance-trend">
         <div className="p-4 border-b border-border flex items-center justify-between flex-wrap gap-2">

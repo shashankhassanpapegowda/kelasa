@@ -1,6 +1,5 @@
 # Iteration 6 focused retest: self-decision block, self-edit block, manager cancel scope+log, holiday-aware day count, quota msg, leave-type dup code
 import os
-import re
 import uuid
 from datetime import datetime, timezone, timedelta
 import pytest
@@ -23,7 +22,7 @@ def types_by_code(tok=EMP):
     return {t["code"]: t for t in requests.get(f"{API}/leave/types", headers=h(tok)).json()["types"]}
 
 
-def apply(tok, start, end, code="LOP"):
+def apply(tok, start, end, code="LV"):
     t = types_by_code(tok)
     return requests.post(f"{API}/leave/request", headers=h(tok), json={
         "type_id": t[code]["type_id"], "start_date": start, "end_date": end, "reason": "TEST_iter6"})
@@ -151,12 +150,15 @@ class TestHolidayCounting:
 
 # ---- Quota message + leave-type duplicate code ----
 class TestMisc:
-    def test_quota_message_whole_number(self, mdb):
-        r = apply(EMP, "2026-11-01", "2026-11-20", code="SL")
-        assert r.status_code == 400
-        msg = r.json()["detail"]
-        assert re.match(r"^Only \d+(\.5)? day\(s\) of Sick Leave left$", msg), msg
-        assert ".0 " not in msg
+    def test_days_past_the_monthly_paid_day_are_unpaid(self, mdb):
+        # Mon–Fri in a month nothing else uses. One day is paid; the other four are unpaid.
+        r = apply(EMP, "2029-02-05", "2029-02-09")
+        assert r.status_code == 200, r.text
+        req = r.json()["request"]
+        assert req["paid_days"] == 1
+        assert req["lop_days"] == 4
+        assert req["days"] == 5
+        requests.post(f"{API}/leave/{req['leave_id']}/cancel", headers=h(EMP))
 
     def test_patch_leave_type_dup_code(self, mdb):
         code = f"T{uuid.uuid4().hex[:3].upper()}"
@@ -166,7 +168,7 @@ class TestMisc:
         tid = c.json()["type"]["type_id"]
         try:
             p = requests.patch(f"{API}/admin/leave-types/{tid}", headers=h(ADMIN), json={
-                "name": "TEST_iter6_type", "code": "cl", "policy": "none"})
+                "name": "TEST_iter6_type", "code": "lv", "policy": "none"})
             assert p.status_code == 400
             ok = requests.patch(f"{API}/admin/leave-types/{tid}", headers=h(ADMIN), json={
                 "name": "TEST_iter6_type2", "code": code, "policy": "none"})

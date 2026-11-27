@@ -39,6 +39,12 @@ from work_timing import (
     resolve_day, split_editable, summarize_override, summarize_week,
     validate_grace, validate_override, validate_week,
 )
+from staff_rules import (
+    PAID_LEAVE_CODE, PAID_LEAVE_NAME, announcement_push_user_ids, announcement_visible,
+    classify_leave_days, correction_window_error, empty_span_message, leave_warning_dates,
+    absent_people_for, project_month_summary,
+)
+from decimal import Decimal
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
@@ -243,6 +249,8 @@ class BranchUpdate(BaseModel):
     lng: Optional[float] = None
     radius_m: Optional[int] = None
     clear_geofence: bool = False
+    # Admin only. Missing on older branches means off.
+    leave_sandwich_lop: Optional[bool] = None
 
 class PushKeys(BaseModel):
     p256dh: str
@@ -326,6 +334,8 @@ class AnnouncementIn(BaseModel):
     body: str
     pinned: bool = False
     notify_phones: bool = True
+    audience: Literal["all", "branches"] = "all"
+    branches: List[str] = []
 
 # ---------- Helpers ----------
 def now_utc() -> datetime:
@@ -525,12 +535,66 @@ async def push_announcement(doc: dict):
     subs = await db.push_subscriptions.find(
         {"announcements": {"$ne": False}, "user_id": {"$ne": doc["author_id"]}}, {"_id": 0}
     ).to_list(5000)
+    if subs and (doc.get("audience") == "branches" and doc.get("branches")):
+        users = await db.users.find(
+            {"user_id": {"$in": list({s["user_id"] for s in subs})}},
+            {"_id": 0, "user_id": 1, "role": 1, "site": 1, "managed_sites": 1},
+        ).to_list(5000)
+        allowed = announcement_push_user_ids(doc, users, doc.get("author_id"))
+        subs = [s for s in subs if s["user_id"] in allowed]
     body = doc["body"] if len(doc["body"]) <= 180 else doc["body"][:177] + "…"
     sent = await push_to_subscriptions(subs, {
         "title": f"Notice: {doc['title']}", "body": body or f"New notice from {doc.get('author_name') or 'admin'}",
         "tag": doc["announcement_id"], "url": "/",
     })
     await db.announcements.update_one({"announcement_id": doc["announcement_id"]}, {"$set": {"pushed_devices": sent}})
+
+
+async def push_leave_filed(employee: dict, req: dict):
+    """Tell the admins and this employee's managers that leave was requested."""
+    subs = await db.push_subscriptions.find({"leave_updates": {"$ne": False}}, {"_id": 0}).to_list(2000)
+    if not subs:
+        return
+    managers = await db.users.find(
+        {"user_id": {"$in": list({x["user_id"] for x in subs})}, "role": {"$in": ["admin", "sub_admin"]}},
+        {"_id": 0},
+    ).to_list(500)
+    allowed = set()
+    for manager in managers:
+        if manager["user_id"] == employee["user_id"]:
+            continue
+        if manager["role"] == "admin":
+            allowed.add(manager["user_id"])
+            continue
+        ids = await scoped_user_ids(manager)
+        if ids is None or employee["user_id"] in ids:
+            allowed.add(manager["user_id"])
+    dates = _fmt_day(req["start_date"]) if req["start_date"] == req["end_date"] else f"{_fmt_day(req['start_date'])} – {_fmt_day(req['end_date'])}"
+    await push_to_subscriptions([x for x in subs if x["user_id"] in allowed], {
+        "title": "Leave request",
+        "body": f"{employee.get('name') or 'An employee'} · {req['type_name']} · {dates}",
+        "tag": f"leave_req_{req['leave_id']}",
+        "url": "/admin#leave",
+    })
+
+
+async def push_correction_filed(employee: dict, reg: dict):
+    """Attendance corrections are decided by admins only, so only they are notified."""
+    subs = await db.push_subscriptions.find({"leave_updates": {"$ne": False}}, {"_id": 0}).to_list(2000)
+    if not subs:
+        return
+    admins = await db.users.find(
+        {"user_id": {"$in": list({x["user_id"] for x in subs})}, "role": "admin"},
+        {"_id": 0, "user_id": 1},
+    ).to_list(200)
+    allowed = {a["user_id"] for a in admins if a["user_id"] != employee["user_id"]}
+    nice = ddate.fromisoformat(reg["date"]).strftime("%d %b")
+    await push_to_subscriptions([x for x in subs if x["user_id"] in allowed], {
+        "title": "Attendance correction",
+        "body": f"{employee.get('name') or 'An employee'} asked to correct {nice}",
+        "tag": f"reg_req_{reg['request_id']}",
+        "url": "/admin#corrections",
+    })
 
 def spawn_push(employee_id: str, payload: dict):
     task = asyncio.create_task(push_to_managers_of(employee_id, payload))
@@ -644,6 +708,7 @@ def upload_face_image(user_id: str, image_b64: str, kind: str) -> str:
 async def get_me(user: dict = Depends(get_current_user)):
     u = dict(user)
     u.pop("face_descriptor", None)
+    u["leave_sandwich_lop"] = await branch_sandwich_lop(user.get("site"))
     return u
 
 @api_router.post("/auth/logout")
@@ -1913,6 +1978,9 @@ async def admin_org(user: dict = Depends(require_manager)):
     managers = await db.users.find(
         {"role": {"$in": ["admin", "sub_admin"]}}, {"_id": 0, "user_id": 1, "name": 1, "role": 1, "managed_departments": 1, "managed_sites": 1}
     ).sort("name", 1).to_list(500)
+    if user.get("role") != "admin":
+        for site in sites:
+            site.pop("leave_sandwich_lop", None)
     return {"departments": depts, "sites": sites, "managers": managers}
 
 @api_router.post("/admin/org/departments")
@@ -1975,6 +2043,8 @@ async def update_site(unit_id: str, payload: BranchUpdate, user: dict = Depends(
         if not (10 <= payload.radius_m <= 10000):
             raise HTTPException(status_code=400, detail="Radius must be between 10 and 10000 metres")
         updates.update({"lat": payload.lat, "lng": payload.lng, "radius_m": payload.radius_m})
+    if payload.leave_sandwich_lop is not None:
+        updates["leave_sandwich_lop"] = bool(payload.leave_sandwich_lop)
     if not updates:
         raise HTTPException(status_code=400, detail="No changes")
     await db.sites.update_one({"unit_id": unit_id}, {"$set": updates})
@@ -1983,8 +2053,14 @@ async def update_site(unit_id: str, payload: BranchUpdate, user: dict = Depends(
         await db.users.update_many({"managed_sites": doc["name"]}, {"$set": {"managed_sites.$": updates["name"]}})
         await db.holidays.update_many({"branches": doc["name"]}, {"$set": {"branches.$": updates["name"]}})
     new_doc = await db.sites.find_one({"unit_id": unit_id}, {"_id": 0})
-    detail = f"radius {new_doc.get('radius_m')} m" if new_doc.get("radius_m") else "geofence cleared"
-    await log_activity(user, "branch_updated", new_doc["name"], detail)
+    bits = []
+    if payload.leave_sandwich_lop is not None:
+        bits.append("sandwich loss of pay on" if new_doc.get("leave_sandwich_lop") else "sandwich loss of pay off")
+    if payload.clear_geofence or payload.lat is not None:
+        bits.append(f"radius {new_doc.get('radius_m')} m" if new_doc.get("radius_m") else "geofence cleared")
+    if "name" in updates:
+        bits.append(f"renamed from {doc['name']}")
+    await log_activity(user, "branch_updated", new_doc["name"], " · ".join(bits) or "updated")
     return {"ok": True, "site": new_doc}
 
 GEOCODE_UA = {"User-Agent": "Kelasa-Attendance/1.0 (branch geofence setup)"}
@@ -2170,21 +2246,33 @@ async def admin_set_scope(user_id: str, payload: ScopeUpdate, user: dict = Depen
     return {"ok": True}
 
 # ---------- Leave ----------
-DEFAULT_LEAVE_TYPES = [
-    {"code": "CL", "name": "Casual Leave", "policy": "yearly", "annual_quota": 12, "monthly_accrual": 0, "paid": True, "color": "#0047FF"},
-    {"code": "SL", "name": "Sick Leave", "policy": "yearly", "annual_quota": 6, "monthly_accrual": 0, "paid": True, "color": "#FF3B30"},
-    {"code": "EL", "name": "Earned Leave", "policy": "monthly", "annual_quota": 0, "monthly_accrual": 1.5, "paid": True, "color": "#00A86B"},
-    {"code": "LOP", "name": "Unpaid Leave", "policy": "none", "annual_quota": 0, "monthly_accrual": 0, "paid": False, "color": "#52525B"},
-]
+# One paid leave day per calendar month. Older CL / SL / EL / LOP documents stay
+# in the database so past requests and payroll still read their type names.
+LEGACY_LEAVE_CODES = ("CL", "SL", "EL", "LOP")
+PAID_LEAVE_TYPE = {
+    "code": PAID_LEAVE_CODE, "name": PAID_LEAVE_NAME, "policy": "monthly_reset",
+    "annual_quota": 0, "monthly_accrual": 1, "paid": True, "color": "#0047FF",
+    "requestable": True,
+}
 
 async def seed_leave_types():
-    if await db.leave_types.count_documents({}) == 0:
-        for t in DEFAULT_LEAVE_TYPES:
-            await db.leave_types.insert_one({
-                "type_id": f"lt_{uuid.uuid4().hex[:10]}", "active": True,
-                "created_at": now_utc().isoformat(), **t,
-            })
-        logger.info("Seeded default leave types")
+    existing = await db.leave_types.find_one({"code": PAID_LEAVE_CODE}, {"_id": 0, "type_id": 1})
+    if not existing:
+        await db.leave_types.insert_one({
+            "type_id": f"lt_{uuid.uuid4().hex[:10]}", "active": True,
+            "created_at": now_utc().isoformat(), **PAID_LEAVE_TYPE,
+        })
+        logger.info("Seeded monthly paid leave")
+    else:
+        await db.leave_types.update_one({"code": PAID_LEAVE_CODE}, {"$set": {
+            "name": PAID_LEAVE_NAME, "policy": "monthly_reset", "monthly_accrual": 1,
+            "annual_quota": 0, "paid": True, "active": True, "requestable": True,
+        }})
+    # Retire the old types for new requests. Do not delete them or rewrite leave documents.
+    await db.leave_types.update_many(
+        {"code": {"$in": list(LEGACY_LEAVE_CODES)}},
+        {"$set": {"requestable": False}},
+    )
 
 def count_leave_days_raw(start: str, end: str, half_day: bool) -> float:
     try:
@@ -2213,41 +2301,149 @@ def holiday_scope(site: Optional[str]) -> dict:
 def holiday_applies(h: dict, site: Optional[str]) -> bool:
     return not h.get("branches") or (site in h["branches"])
 
-async def count_leave_days(start: str, end: str, half_day: bool, site: Optional[str] = None) -> float:
-    """Calendar days minus declared holidays (company-wide or the employee's branch) inside the range."""
-    days = count_leave_days_raw(start, end, half_day)
-    if half_day:
-        return days
-    holidays = len(await db.holidays.distinct("date", {"date": {"$gte": start, "$lte": end}, **holiday_scope(site)}))
-    net = days - holidays
-    if net <= 0:
-        raise HTTPException(status_code=400, detail="Those dates are already company holidays")
-    return float(net)
+async def branch_sandwich_lop(site: Optional[str]) -> bool:
+    """Missing field and unknown branches stay off until an admin opts a branch in."""
+    if not site:
+        return False
+    doc = await db.sites.find_one({"name": site}, {"_id": 0, "leave_sandwich_lop": 1})
+    return bool(doc and doc.get("leave_sandwich_lop"))
+
+async def holiday_dates_between(site: Optional[str], start: ddate, end: ddate) -> set:
+    """Holidays that apply to `site`, including one day either side for sandwich adjacency."""
+    lo = (start - timedelta(days=1)).isoformat()
+    hi = (end + timedelta(days=1)).isoformat()
+    docs = await db.holidays.find(
+        {"date": {"$gte": lo, "$lte": hi}}, {"_id": 0, "date": 1, "branches": 1}
+    ).to_list(500)
+    return {ddate.fromisoformat(h["date"]) for h in docs if holiday_applies(h, site)}
+
+async def off_dates_for_user(user: dict, start: ddate, end: ddate) -> set:
+    """Weekly offs from the employee's work timing when one is saved, else weekly_off (Sunday by default)."""
+    dates = []
+    cur = start
+    while cur <= end:
+        dates.append(cur.isoformat())
+        cur += timedelta(days=1)
+    resolve = await load_resolution({user["user_id"]: user}, dates)
+    has_schedule = await db.work_schedules.find_one({"user_id": user["user_id"]}, {"_id": 0, "user_id": 1})
+    legacy = set(user.get("weekly_off") if user.get("weekly_off") is not None else DEFAULT_WEEKLY_OFF)
+    offs = set()
+    cur = start
+    while cur <= end:
+        if has_schedule:
+            timing = resolve(user["user_id"], cur)
+            if timing.uses_schedule and not timing.working:
+                offs.add(cur)
+            elif not timing.uses_schedule and cur.weekday() in legacy:
+                offs.add(cur)
+        elif cur.weekday() in legacy:
+            offs.add(cur)
+        cur += timedelta(days=1)
+    return offs
+
+def _months_in(start: ddate, end: ddate) -> set:
+    months = set()
+    cur = start.replace(day=1)
+    last = end.replace(day=1)
+    while cur <= last:
+        months.add(f"{cur.year:04d}-{cur.month:02d}")
+        cur = ddate(cur.year + (cur.month == 12), 1 if cur.month == 12 else cur.month + 1, 1)
+    return months
+
+async def paid_consumed(user_id: str, months: set) -> dict:
+    """Paid days already taken (approved or still pending) in each month, from stored classifications."""
+    if not months:
+        return {}
+    reqs = await db.leave_requests.find(
+        {"user_id": user_id, "status": {"$in": ["approved", "pending"]}, "paid_dates": {"$exists": True}},
+        {"_id": 0, "paid_dates": 1, "half_day": 1},
+    ).to_list(2000)
+    used = {}
+    for req in reqs:
+        portion = Decimal("0.5") if req.get("half_day") else Decimal("1")
+        for raw in req.get("paid_dates") or []:
+            month = str(raw)[:7]
+            if month in months:
+                used[month] = used.get(month, Decimal("0")) + portion
+    return used
+
+def _leave_numbers(result: dict) -> dict:
+    def num(value: Decimal) -> float:
+        return float(value)
+    return {
+        "days": num(result["days"]),
+        "paid_days": num(result["paid_days"]),
+        "lop_days": num(result["lop_days"]),
+        "paid_dates": result["paid_dates"],
+        "lop_dates": result["lop_dates"],
+    }
+
+async def assess_leave(user: dict, start: str, end: str, half_day: bool) -> dict:
+    """Classify a request. Raises when the range is only holidays and weekly offs."""
+    count_leave_days_raw(start, end, half_day)
+    start_d, end_d = ddate.fromisoformat(start), ddate.fromisoformat(end)
+    hols = await holiday_dates_between(user.get("site"), start_d, end_d)
+    offs = await off_dates_for_user(user, start_d, end_d)
+    sandwich = await branch_sandwich_lop(user.get("site"))
+    already = await paid_consumed(user["user_id"], _months_in(start_d, end_d))
+    result = classify_leave_days(
+        start_d, end_d, half_day, off_dates=offs, holiday_dates=hols,
+        sandwich_enabled=sandwich, already_paid=already,
+    )
+    if result["days"] <= 0:
+        in_span = {d.isoformat() for d in hols if start_d <= d <= end_d}
+        raise HTTPException(status_code=400, detail=empty_span_message(result["skipped_dates"], in_span))
+    numbers = _leave_numbers(result)
+    numbers["leave_sandwich_lop"] = sandwich
+    numbers["warning_dates"] = leave_warning_dates(result, sandwich)
+    return numbers
 
 def fmt_days(n: float) -> str:
     return str(int(n)) if float(n).is_integer() else str(n)
 
-async def leave_balances_for(user_id: str, year: int, ltypes=None) -> List[dict]:
+def _portion_in_month(req: dict, month: str) -> float:
+    """Paid days of one request that fall in YYYY-MM. Legacy rows without paid_dates use `days` in their start month."""
+    dates = req.get("paid_dates")
+    portion = 0.5 if req.get("half_day") else 1.0
+    if dates is not None:
+        return portion * sum(1 for raw in dates if str(raw)[:7] == month)
+    if req.get("start_date", "")[:7] == month:
+        return float(req.get("paid_days") if req.get("paid_days") is not None else req.get("days") or 0)
+    return 0.0
+
+async def leave_balances_for(user_id: str, year: int, ltypes=None, month: Optional[str] = None) -> List[dict]:
     if ltypes is None:
-        ltypes = await db.leave_types.find({"active": True}, {"_id": 0}).to_list(100)
+        ltypes = await db.leave_types.find({"active": True, "requestable": {"$ne": False}}, {"_id": 0}).to_list(100)
     reqs = await db.leave_requests.find(
-        {"user_id": user_id, "year": year, "status": {"$in": ["approved", "pending"]}}, {"_id": 0}
+        {"user_id": user_id, "status": {"$in": ["approved", "pending"]}}, {"_id": 0}
     ).to_list(2000)
     now_local = datetime.now(ZoneInfo(DEFAULT_TZ))
-    months = 12 if now_local.year > year else (0 if now_local.year < year else now_local.month)
+    if month is None:
+        month = f"{year:04d}-{now_local.month:02d}" if now_local.year == year else f"{year:04d}-01"
+    elapsed = 12 if now_local.year > year else (0 if now_local.year < year else now_local.month)
     out = []
     for t in ltypes:
-        used = sum(r["days"] for r in reqs if r["type_id"] == t["type_id"] and r["status"] == "approved")
-        pending = sum(r["days"] for r in reqs if r["type_id"] == t["type_id"] and r["status"] == "pending")
-        if t["policy"] == "yearly":
+        mine = [r for r in reqs if r.get("type_id") == t["type_id"]]
+        if t.get("policy") == "monthly_reset":
+            used = sum(_portion_in_month(r, month) for r in mine if r["status"] == "approved")
+            pending = sum(_portion_in_month(r, month) for r in mine if r["status"] == "pending")
+            entitled = 1.0
+        elif t["policy"] == "yearly":
+            used = sum(r["days"] for r in mine if r["status"] == "approved" and r.get("year") == year)
+            pending = sum(r["days"] for r in mine if r["status"] == "pending" and r.get("year") == year)
             entitled = float(t.get("annual_quota") or 0)
         elif t["policy"] == "monthly":
-            entitled = round(float(t.get("monthly_accrual") or 0) * months, 1)
+            used = sum(r["days"] for r in mine if r["status"] == "approved" and r.get("year") == year)
+            pending = sum(r["days"] for r in mine if r["status"] == "pending" and r.get("year") == year)
+            entitled = round(float(t.get("monthly_accrual") or 0) * elapsed, 1)
         else:
+            used = sum(r["days"] for r in mine if r["status"] == "approved" and r.get("year") == year)
+            pending = sum(r["days"] for r in mine if r["status"] == "pending" and r.get("year") == year)
             entitled = None
         out.append({
             "type_id": t["type_id"], "name": t["name"], "code": t["code"], "policy": t["policy"],
             "color": t.get("color"), "paid": t.get("paid", True),
+            "month": month if t.get("policy") == "monthly_reset" else None,
             "entitled": entitled, "used": used, "pending": pending,
             "available": None if entitled is None else round(entitled - used - pending, 1),
         })
@@ -2255,13 +2451,37 @@ async def leave_balances_for(user_id: str, year: int, ltypes=None) -> List[dict]
 
 @api_router.get("/leave/types")
 async def leave_types(user: dict = Depends(get_current_user)):
-    types = await db.leave_types.find({"active": True}, {"_id": 0}).to_list(100)
+    types = await db.leave_types.find({"active": True, "requestable": {"$ne": False}}, {"_id": 0}).to_list(100)
     return {"types": types}
 
 @api_router.get("/leave/balance")
-async def my_leave_balance(user: dict = Depends(get_current_user), year: Optional[int] = None):
-    y = year or datetime.now(ZoneInfo(DEFAULT_TZ)).year
-    return {"year": y, "balances": await leave_balances_for(user["user_id"], y)}
+async def my_leave_balance(user: dict = Depends(get_current_user), year: Optional[int] = None, month: Optional[str] = None):
+    now_local = datetime.now(ZoneInfo(DEFAULT_TZ))
+    y = year or now_local.year
+    if month and (len(month) != 7 or month[4] != "-"):
+        raise HTTPException(status_code=400, detail="month must be YYYY-MM")
+    m = month or f"{y:04d}-{now_local.month:02d}"
+    types = await db.leave_types.find({"active": True, "code": PAID_LEAVE_CODE}, {"_id": 0}).to_list(5)
+    return {
+        "year": y, "month": m,
+        "leave_sandwich_lop": await branch_sandwich_lop(user.get("site")),
+        "balances": await leave_balances_for(user["user_id"], y, types, month=m),
+    }
+
+@api_router.get("/leave/preview")
+async def leave_preview(
+    start_date: str, end_date: str, half_day: bool = False, user: dict = Depends(get_current_user),
+):
+    """What a request would do. The warning lists LOP dates only when this branch has sandwich LOP on."""
+    end = start_date if half_day else end_date
+    try:
+        assessed = await assess_leave(user, start_date, end, half_day)
+    except HTTPException as exc:
+        if exc.status_code != 400:
+            raise
+        sandwich = await branch_sandwich_lop(user.get("site"))
+        return {"ok": False, "detail": exc.detail, "leave_sandwich_lop": sandwich, "warning_dates": [], "lop_dates": [], "paid_dates": []}
+    return {"ok": True, **assessed}
 
 @api_router.get("/leave/me")
 async def my_leave_requests(user: dict = Depends(get_current_user), limit: int = 100):
@@ -2271,23 +2491,19 @@ async def my_leave_requests(user: dict = Depends(get_current_user), limit: int =
 @api_router.post("/leave/request")
 async def create_leave_request(payload: LeaveRequestIn, user: dict = Depends(get_current_user)):
     ltype = await db.leave_types.find_one({"type_id": payload.type_id, "active": True}, {"_id": 0})
-    if not ltype:
-        raise HTTPException(status_code=400, detail="Invalid leave type")
-    days = await count_leave_days(payload.start_date, payload.end_date, payload.half_day, user.get("site"))
+    if not ltype or ltype.get("requestable") is False or ltype.get("code") != PAID_LEAVE_CODE:
+        raise HTTPException(status_code=400, detail="Use the monthly paid leave")
+    end = payload.start_date if payload.half_day else payload.end_date
+    assessed = await assess_leave(user, payload.start_date, end, payload.half_day)
     overlap = await db.leave_requests.find_one({
         "user_id": user["user_id"],
         "status": {"$in": ["approved", "pending"]},
-        "start_date": {"$lte": payload.end_date},
+        "start_date": {"$lte": end},
         "end_date": {"$gte": payload.start_date},
     }, {"_id": 0})
     if overlap:
         raise HTTPException(status_code=400, detail="You already have a leave request covering these dates")
     year = ddate.fromisoformat(payload.start_date).year
-    if ltype["policy"] != "none":
-        balances = await leave_balances_for(user["user_id"], year)
-        bal = next((b for b in balances if b["type_id"] == ltype["type_id"]), None)
-        if bal and bal["available"] is not None and days > bal["available"]:
-            raise HTTPException(status_code=400, detail=f"Only {fmt_days(bal['available'])} day(s) of {ltype['name']} left")
     doc = {
         "leave_id": f"lv_{uuid.uuid4().hex[:12]}",
         "user_id": user["user_id"],
@@ -2296,9 +2512,13 @@ async def create_leave_request(payload: LeaveRequestIn, user: dict = Depends(get
         "type_name": ltype["name"],
         "type_code": ltype["code"],
         "start_date": payload.start_date,
-        "end_date": payload.end_date,
+        "end_date": end,
         "half_day": payload.half_day,
-        "days": days,
+        "days": assessed["days"],
+        "paid_days": assessed["paid_days"],
+        "lop_days": assessed["lop_days"],
+        "paid_dates": assessed["paid_dates"],
+        "lop_dates": assessed["lop_dates"],
         "year": year,
         "reason": (payload.reason or "").strip(),
         "status": "pending",
@@ -2309,6 +2529,7 @@ async def create_leave_request(payload: LeaveRequestIn, user: dict = Depends(get
         "created_at": now_utc().isoformat(),
     }
     await db.leave_requests.insert_one(doc)
+    _track(asyncio.create_task(push_leave_filed(user, doc)))
     return {"ok": True, "request": {k: v for k, v in doc.items() if k != "_id"}}
 
 @api_router.post("/leave/{leave_id}/cancel")
@@ -2367,7 +2588,7 @@ async def admin_decide_leave(leave_id: str, payload: LeaveDecision, user: dict =
         raise HTTPException(status_code=400, detail="This request has already been decided")
     if req["user_id"] == user["user_id"]:
         raise HTTPException(status_code=403, detail="You cannot decide on your own leave request")
-    # NOTE: deliberate product choice — any admin or sub-admin can decide anyone's leave.
+    await ensure_in_scope(user, req["user_id"])
     await db.leave_requests.update_one({"leave_id": leave_id}, {"$set": {
         "status": payload.status,
         "decided_by": user["user_id"],
@@ -2385,11 +2606,12 @@ async def admin_leave_balances(user: dict = Depends(require_manager), year: Opti
     y = year or datetime.now(ZoneInfo(DEFAULT_TZ)).year
     ids = await scoped_user_ids(user)
     emps = await db.users.find(user_filter(ids), {"_id": 0, "user_id": 1, "name": 1, "email": 1, "department": 1}).sort("name", 1).to_list(1000)
-    ltypes = await db.leave_types.find({"active": True}, {"_id": 0}).to_list(100)
+    ltypes = await db.leave_types.find({"active": True, "code": PAID_LEAVE_CODE}, {"_id": 0}).to_list(5)
+    month = f"{y:04d}-{datetime.now(ZoneInfo(DEFAULT_TZ)).month:02d}" if y == datetime.now(ZoneInfo(DEFAULT_TZ)).year else f"{y:04d}-01"
     rows = []
     for e in emps:
-        rows.append({**e, "balances": await leave_balances_for(e["user_id"], y, ltypes)})
-    return {"year": y, "rows": rows, "types": ltypes}
+        rows.append({**e, "balances": await leave_balances_for(e["user_id"], y, ltypes, month=month)})
+    return {"year": y, "month": month, "rows": rows, "types": ltypes}
 
 @api_router.post("/admin/leave-types")
 async def create_leave_type(payload: LeaveTypeIn, user: dict = Depends(require_admin)):
@@ -2501,25 +2723,56 @@ async def delete_holiday(holiday_id: str, user: dict = Depends(require_manager))
     return {"ok": True}
 
 # ---------- Announcements ----------
+def _announcement_target(user: dict, payload: AnnouncementIn) -> tuple:
+    audience = payload.audience or "all"
+    branches = sorted({b.strip() for b in (payload.branches or []) if b and b.strip()})
+    if user.get("role") != "admin":
+        mine = set(user.get("managed_sites") or [])
+        if not mine:
+            raise HTTPException(status_code=403, detail="You don't manage any branch yet. Ask an admin to assign one.")
+        if audience == "all" or not branches:
+            raise HTTPException(status_code=400, detail="Pick at least one of your branches")
+        if set(branches) - mine:
+            raise HTTPException(status_code=403, detail="You can only post notices for your own branches")
+        return "branches", branches
+    if audience == "branches":
+        if not branches:
+            raise HTTPException(status_code=400, detail="Pick at least one branch")
+        return "branches", branches
+    return "all", []
+
 @api_router.get("/announcements")
 async def list_announcements(user: dict = Depends(get_current_user), limit: int = 20):
-    docs = await db.announcements.find({}, {"_id": 0}).sort([("pinned", -1), ("created_at", -1)]).to_list(limit)
-    return {"announcements": docs}
+    # Filter before the limit so a company-wide pin the viewer cannot see does not hide their own notice.
+    docs = await db.announcements.find({}, {"_id": 0}).sort([("pinned", -1), ("created_at", -1)]).to_list(500)
+    visible = [d for d in docs if announcement_visible(d, user)][: max(1, min(limit, 100))]
+    for doc in visible:
+        doc["audience"] = doc.get("audience") or "all"
+        doc["branches"] = doc.get("branches") or []
+    return {"announcements": visible}
 
 @api_router.post("/admin/announcements")
 async def add_announcement(payload: AnnouncementIn, user: dict = Depends(require_manager)):
     if not payload.title.strip():
         raise HTTPException(status_code=400, detail="Title required")
+    audience, branches = _announcement_target(user, payload)
+    if branches:
+        known = {s["name"] for s in await db.sites.find({}, {"_id": 0, "name": 1}).to_list(500)}
+        unknown = set(branches) - known
+        if unknown:
+            raise HTTPException(status_code=400, detail=f"Unknown branch: {', '.join(sorted(unknown))}")
     doc = {
         "announcement_id": f"ann_{uuid.uuid4().hex[:10]}",
         "title": payload.title.strip(), "body": payload.body.strip(),
         "pinned": payload.pinned, "author_id": user["user_id"], "author_name": user.get("name"),
+        "audience": audience, "branches": branches,
         "created_at": now_utc().isoformat(), "notify_phones": payload.notify_phones,
     }
     await db.announcements.insert_one(doc)
     if payload.notify_phones:
         _track(asyncio.create_task(push_announcement(dict(doc))))
-    await log_activity(user, "announcement_posted", doc["title"])
+    where = "whole company" if audience == "all" else ", ".join(branches)
+    await log_activity(user, "announcement_posted", doc["title"], where)
     return {"ok": True, "announcement": {k: v for k, v in doc.items() if k != "_id"}}
 
 @api_router.delete("/admin/announcements/{announcement_id}")
@@ -3651,7 +3904,7 @@ async def build_calendar(u: dict, month: str) -> dict:
     prof = await db.employee_profiles.find_one({"user_id": uid}, {"_id": 0, "date_of_joining": 1}) or {}
     jd = prof.get("date_of_joining") or (u.get("created_at") or "")[:10] or None
     has_shift = bool(u.get("shift_start"))
-    half = (shift_minutes(u.get("shift_start"), u.get("shift_end")) or 0) / 2
+    legacy_half = (shift_minutes(u.get("shift_start"), u.get("shift_end")) or 0) / 2
     today_d = local_today_date(u)
     month_dates = []
     cursor = first
@@ -3667,7 +3920,14 @@ async def build_calendar(u: dict, month: str) -> dict:
         lv = leave_by_date.get(d)
         net = sum((x.get("net_work_minutes") or 0) for x in sess)
         open_now = any(not x.get("check_out") for x in sess)
-        shown = timing_public(resolve(uid, cur))
+        timing = resolve(uid, cur)
+        shown = timing_public(timing)
+        if timing.uses_schedule and timing.working:
+            half = (shift_minutes(timing.start, timing.end) or 0) / 2
+        elif timing.uses_schedule:
+            half = 0
+        else:
+            half = legacy_half
         status = day_status(cur, today=today_d, present=bool(sess),
                             late=(has_shift or bool(shown)) and any((x.get("late_by_minutes") or 0) > 0 for x in sess),
                             on_leave=bool(lv), holiday=d in hols, weekly_off=u.get("weekly_off", DEFAULT_WEEKLY_OFF),
@@ -3682,17 +3942,106 @@ async def build_calendar(u: dict, month: str) -> dict:
         elif cur == today_d and not sess and status == "absent":
             status = "today"
         counts[status] = counts.get(status, 0) + 1
+        leave_view = None
+        if lv:
+            leave_view = {
+                "leave_type": lv.get("type_name") or lv.get("leave_type") or lv.get("type_code"),
+                "type_code": lv.get("type_code"),
+                "half_day": lv.get("half_day"),
+                "lop": d in set(lv.get("lop_dates") or []),
+            }
         days.append({"date": d, "status": status, "sessions": sess, "net_work_minutes": net,
-                     "holiday": hols.get(d), "leave": {"leave_type": lv.get("leave_type"), "half_day": lv.get("half_day")} if lv else None,
+                     "holiday": hols.get(d), "leave": leave_view,
                      "regularization": regs.get(d), "timing": shown})
         cur += timedelta(days=1)
+    summary = await month_summary_for(u, month)
     return {"month": month, "today": today_d.isoformat(), "days": days, "counts": counts,
             "total_work_minutes": sum(x["net_work_minutes"] for x in days),
-            "shift": {"start": u.get("shift_start"), "end": u.get("shift_end")}}
+            "shift": {"start": u.get("shift_start"), "end": u.get("shift_end")},
+            "summary": summary}
+
+def public_month_summary(month: str, breakdown: dict) -> dict:
+    """Staff-facing month card. Same NDP figures a draft payroll run would store, before any override."""
+    return project_month_summary(month, breakdown)
+
+async def nwd_for_user_month(user: dict, month: str):
+    from payroll_calc import D, days_in_month, default_settings, normalize_settings, nwd_for
+    year, mon = map(int, month.split("-"))
+    nwd = D(days_in_month(year, mon))
+    if not user.get("site"):
+        return nwd
+    site = await db.sites.find_one({"name": user["site"]}, {"_id": 0, "unit_id": 1})
+    if not site:
+        return nwd
+    from payroll_api import _settings_for
+    pack = await _settings_for(site["unit_id"], month)
+    settings = normalize_settings(pack.get("settings") or default_settings())
+    if settings.get("proration") != "calendar":
+        return nwd_for(year, mon, settings, user.get("weekly_off") or [6])
+    return nwd
+
+async def month_summary_for(user: dict, month: str) -> dict:
+    from payroll_api import _attendance_for
+    _month_bounds(month)
+    profile = await db.employee_profiles.find_one({"user_id": user["user_id"]}, {"_id": 0}) or {}
+    nwd = await nwd_for_user_month(user, month)
+    breakdown = await _attendance_for(user, profile, month, nwd)
+    return public_month_summary(month, breakdown)
 
 @api_router.get("/me/calendar")
 async def my_calendar(month: str = Query(..., pattern=r"^\d{4}-\d{2}$"), user: dict = Depends(get_current_user)):
     return await build_calendar(user, month)
+
+@api_router.get("/me/month-summary")
+async def my_month_summary(month: str = Query(..., pattern=r"^\d{4}-\d{2}$"), user: dict = Depends(get_current_user)):
+    return await month_summary_for(user, month)
+
+@api_router.get("/absent-today")
+async def absent_today(date: Optional[str] = None, user: dict = Depends(get_current_user)):
+    """Names on approved leave that day, grouped by branch. Pending and unplanned absences are omitted."""
+    if date:
+        try:
+            ddate.fromisoformat(date)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Use a YYYY-MM-DD date") from None
+        day = date
+    else:
+        day = datetime.now(ZoneInfo(DEFAULT_TZ)).date().isoformat()
+    reqs = await db.leave_requests.find(
+        {"status": "approved", "start_date": {"$lte": day}, "end_date": {"$gte": day}},
+        {"_id": 0, "user_id": 1},
+    ).to_list(2000)
+    ids = list({r["user_id"] for r in reqs})
+    people = []
+    if ids:
+        for emp in await db.users.find(
+            {"user_id": {"$in": ids}},
+            {"_id": 0, "user_id": 1, "name": 1, "site": 1, "designation": 1, "picture": 1, "face_photo_path": 1},
+        ).to_list(len(ids)):
+            people.append({
+                "user_id": emp["user_id"],
+                "name": emp.get("name") or "Staff",
+                "site": emp.get("site") or "Unassigned",
+                "designation": emp.get("designation") or "",
+                "picture": emp.get("picture"),
+                "photo_path": emp.get("face_photo_path"),
+            })
+    scoped = None
+    if user.get("role") == "sub_admin" and not (user.get("managed_sites") or []):
+        scoped = await scoped_user_ids(user)
+    visible = absent_people_for(user, people, scoped)
+    grouped: dict = {}
+    for person in visible:
+        branch = person.get("site") or "Unassigned"
+        grouped.setdefault(branch, []).append({
+            "name": person["name"],
+            "designation": person.get("designation") or "",
+            "picture": person.get("picture"),
+            "photo_path": person.get("photo_path"),
+        })
+    branches = [{"branch": name, "people": sorted(rows, key=lambda row: row["name"].lower())}
+                for name, rows in sorted(grouped.items(), key=lambda item: item[0].lower())]
+    return {"date": day, "branches": branches}
 
 @api_router.get("/me/calendar.csv")
 async def my_calendar_csv(request: Request, month: str = Query(..., pattern=r"^\d{4}-\d{2}$"), auth: Optional[str] = Query(None)):
@@ -3725,8 +4074,9 @@ async def create_regularization(payload: RegularizationIn, user: dict = Depends(
         day = ddate.fromisoformat(payload.date)
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid date") from None
-    if day > local_today_date(user):
-        raise HTTPException(status_code=400, detail="You can't correct a future day")
+    window_error = correction_window_error(day, local_today_date(user))
+    if window_error:
+        raise HTTPException(status_code=400, detail=window_error)
     tz = user.get("timezone") or DEFAULT_TZ
     cin, cout = _local_iso(payload.date, payload.check_in, tz), _local_iso(payload.date, payload.check_out, tz)
     if cout <= cin:
@@ -3743,6 +4093,7 @@ async def create_regularization(payload: RegularizationIn, user: dict = Depends(
     await db.regularizations.insert_one(doc)
     await log_activity(user, "regularization_requested", user.get("name") or user["user_id"],
                        f"{payload.date} {payload.check_in}-{payload.check_out}")
+    _track(asyncio.create_task(push_correction_filed(user, doc)))
     doc.pop("_id", None)
     return {"ok": True, "request": doc}
 
@@ -3802,11 +4153,12 @@ async def apply_regularization(reg: dict, emp: dict):
             "auto_closed": False, "over_cap": False, "late_by_minutes": 0}})
 
 @api_router.post("/admin/regularizations/{request_id}/decide")
-async def decide_regularization(request_id: str, payload: RegularizationDecision, user: dict = Depends(require_manager)):
+async def decide_regularization(request_id: str, payload: RegularizationDecision, user: dict = Depends(require_admin)):
     reg = await db.regularizations.find_one({"request_id": request_id}, {"_id": 0})
     if not reg:
         raise HTTPException(status_code=404, detail="Not found")
-    await ensure_manages_other(user, reg["user_id"])
+    if reg["user_id"] == user["user_id"]:
+        raise HTTPException(status_code=403, detail="You cannot decide your own attendance correction")
     note = (payload.note or "").strip()
     if payload.decision == "rejected" and not note:
         raise HTTPException(status_code=400, detail="Add a note explaining why it was rejected")

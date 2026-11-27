@@ -40,58 +40,62 @@ class TestEmployeeLeave:
         r = requests.get(f"{API}/leave/balance", headers=h(EMP))
         assert r.status_code == 200
         b = {x["code"]: x for x in r.json()["balances"]}
-        assert b["CL"]["entitled"] == 12
-        assert b["SL"]["entitled"] == 6
-        assert b["EL"]["policy"] == "monthly" and b["EL"]["entitled"] == 15.0  # 1.5 * 10 months (Oct)
-        assert b["LOP"]["entitled"] is None and b["LOP"]["available"] is None
+        assert b["LV"]["policy"] == "monthly_reset"
+        assert b["LV"]["entitled"] == 1
+        assert b["LV"]["available"] == round(1 - b["LV"]["used"] - b["LV"]["pending"], 1)
+        assert "CL" not in b and "SL" not in b and "EL" not in b
 
     def test_apply_and_cancel(self):
         t = types_by_code()
+        before = {x["code"]: x for x in requests.get(f"{API}/leave/balance", headers=h(EMP)).json()["balances"]}["LV"]["pending"]
         r = requests.post(f"{API}/leave/request", headers=h(EMP), json={
-            "type_id": t["SL"]["type_id"], "start_date": "2026-11-10", "end_date": "2026-11-11", "reason": "TEST_flu"})
+            "type_id": t["LV"]["type_id"], "start_date": "2028-08-08", "end_date": "2028-08-09", "reason": "TEST_flu"})
         assert r.status_code == 200, r.text
         req = r.json()["request"]
         assert req["status"] == "pending" and req["days"] == 2.0
+        assert req["paid_days"] == 1 and req["lop_days"] == 1
         mine = requests.get(f"{API}/leave/me", headers=h(EMP)).json()["requests"]
         assert any(m["leave_id"] == req["leave_id"] for m in mine)
         bal = {x["code"]: x for x in requests.get(f"{API}/leave/balance", headers=h(EMP)).json()["balances"]}
-        assert bal["SL"]["pending"] >= 2
+        assert bal["LV"]["pending"] == before + 1
         c = requests.post(f"{API}/leave/{req['leave_id']}/cancel", headers=h(EMP))
         assert c.status_code == 200
         mine = {m["leave_id"]: m for m in requests.get(f"{API}/leave/me", headers=h(EMP)).json()["requests"]}
         assert mine[req["leave_id"]]["status"] == "cancelled"
 
-    def test_exceed_quota_rejected(self):
+    def test_days_beyond_one_are_unpaid(self):
         t = types_by_code()
         r = requests.post(f"{API}/leave/request", headers=h(EMP), json={
-            "type_id": t["SL"]["type_id"], "start_date": "2026-11-01", "end_date": "2026-11-20"})
-        assert r.status_code == 400
-        assert "left" in r.json()["detail"]
+            "type_id": t["LV"]["type_id"], "start_date": "2028-04-04", "end_date": "2028-04-07", "reason": "TEST_span"})
+        assert r.status_code == 200, r.text
+        req = r.json()["request"]
+        assert req["paid_days"] == 1 and req["lop_days"] == 3 and req["days"] == 4
+        requests.post(f"{API}/leave/{req['leave_id']}/cancel", headers=h(EMP))
 
     def test_overlap_rejected(self):
         t = types_by_code()
         r = requests.post(f"{API}/leave/request", headers=h(EMP), json={
-            "type_id": t["LOP"]["type_id"], "start_date": "2026-11-24", "end_date": "2026-11-25"})
-        assert r.status_code == 200
+            "type_id": t["LV"]["type_id"], "start_date": "2026-11-24", "end_date": "2026-11-25", "reason": "TEST_overlap"})
+        assert r.status_code == 200, r.text
         self.__class__.created.append(r.json()["request"]["leave_id"])
         r2 = requests.post(f"{API}/leave/request", headers=h(EMP), json={
-            "type_id": t["CL"]["type_id"], "start_date": "2026-11-25", "end_date": "2026-11-26"})
+            "type_id": t["LV"]["type_id"], "start_date": "2026-11-25", "end_date": "2026-11-26", "reason": "TEST_overlap"})
         assert r2.status_code == 400
         assert "covering" in r2.json()["detail"]
 
     def test_invalid_dates(self):
         t = types_by_code()
         r = requests.post(f"{API}/leave/request", headers=h(EMP), json={
-            "type_id": t["CL"]["type_id"], "start_date": "2026-11-20", "end_date": "2026-11-18"})
+            "type_id": t["LV"]["type_id"], "start_date": "2026-11-20", "end_date": "2026-11-18"})
         assert r.status_code == 400
         r = requests.post(f"{API}/leave/request", headers=h(EMP), json={
-            "type_id": t["CL"]["type_id"], "start_date": "2026-11-20", "end_date": "2026-11-21", "half_day": True})
+            "type_id": t["LV"]["type_id"], "start_date": "2026-11-20", "end_date": "2026-11-21", "half_day": True})
         assert r.status_code == 400
 
 
 # ---- Leave: approval flow (admin + sub-admin) ----
 class TestLeaveDecisions:
-    def _apply(self, start, end, code="LOP"):
+    def _apply(self, start, end, code="LV"):
         t = types_by_code()
         r = requests.post(f"{API}/leave/request", headers=h(EMP), json={
             "type_id": t[code]["type_id"], "start_date": start, "end_date": end, "reason": "TEST_"})
@@ -127,7 +131,7 @@ class TestLeaveDecisions:
         r = requests.get(f"{API}/admin/leave/balances", headers=h(ADMIN))
         assert r.status_code == 200
         d = r.json()
-        assert len(d["types"]) >= 4
+        assert any(t["code"] == "LV" and t["policy"] == "monthly_reset" for t in d["types"])
         assert any(row["user_id"] == "user_testemp01" for row in d["rows"])
 
 

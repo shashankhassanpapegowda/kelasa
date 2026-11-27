@@ -39,6 +39,40 @@ const ListView = ({ days, onSelect }) => (
   </div>
 );
 
+const num = (v) => (v == null || Number.isNaN(Number(v)) ? 0 : Number(v));
+
+const MonthSummary = ({ summary, fallbackCounts, worked }) => {
+  const s = summary || {};
+  const present = summary ? num(s.present) : (fallbackCounts.present || 0);
+  const half = summary ? num(s.half_days) : (fallbackCounts.half_day || 0);
+  const late = summary ? num(s.late) : (fallbackCounts.late || 0);
+  const leave = summary ? num(s.paid_leave_days) : (fallbackCounts.leave || 0);
+  const cards = [
+    ["Present", half ? `${present} · ${half} half` : present, "present"],
+    ["Late", late, "late"],
+    ["Leave", leave, "leave"],
+    ["Holidays", summary ? num(s.holidays) : "—", "holidays"],
+    ["Weekly offs", summary ? num(s.weekly_offs) : "—", "weekly-offs"],
+    ["Absent / LOP", summary ? num(s.lop) : (fallbackCounts.absent || 0), "absent"],
+    ["Overtime", summary ? fmtDuration(s.overtime_minutes) : fmtDuration(0), "overtime"],
+    ["Days paid", summary ? num(s.ndp) : "—", "days-paid"],
+  ];
+  return (
+    <div className="space-y-2" data-testid="calendar-summary">
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-center">
+        {cards.map(([k, v, id]) => (
+          <div key={id} className="bg-card border border-border rounded-lg p-3" data-testid={`summary-${id}`}>
+            <div className="text-lg font-semibold font-mono">{v}</div>
+            <div className="text-[11px] text-muted-foreground uppercase tracking-wide">{k}</div>
+            {id === "overtime" && <div className="text-[10px] text-muted-foreground">Not paid</div>}
+          </div>
+        ))}
+      </div>
+      <p className="text-[11px] text-muted-foreground">Days paid matches a draft payroll run for this month, before any manual change. Overtime is shown only — it is not added to pay. Worked {fmtDuration(worked)}.</p>
+    </div>
+  );
+};
+
 const MyCorrections = ({ items }) => (
   <section className="bg-card border border-border rounded-xl p-5" data-testid="my-corrections">
     <div className="flex items-center gap-2 mb-3">
@@ -117,15 +151,7 @@ export default function CalendarPage() {
               <div className="border-t border-border pt-4"><Legend/></div>
             </section>
             {cal && (
-              <div className="grid grid-cols-3 sm:grid-cols-7 gap-2 text-center" data-testid="calendar-summary">
-                {[["Worked", fmtDuration(cal.total_work_minutes)], ["Present", (c.present || 0) + (c.late || 0) + (c.half_day || 0) + (c.punch_error || 0)],
-                  ["Absent", c.absent || 0], ["Leave", c.leave || 0], ["Late", c.late || 0], ["Half Day", c.half_day || 0], ["Punch Error", c.punch_error || 0]].map(([k, v]) => (
-                  <div key={k} className="bg-card border border-border rounded-lg p-3">
-                    <div className="text-lg font-semibold font-mono">{v}</div>
-                    <div className="text-[11px] text-muted-foreground uppercase tracking-wide">{k}</div>
-                  </div>
-                ))}
-              </div>
+              <MonthSummary summary={cal.summary} fallbackCounts={c} worked={cal.total_work_minutes}/>
             )}
           </div>
           <div className="space-y-5 lg:sticky lg:top-20">
