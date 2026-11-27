@@ -1,8 +1,10 @@
-"""Calendar-month retention for check-in and check-out selfies.
+"""Calendar-month retention for attendance selfies.
 
+Check-in, check-out, break-start and break-end photos share this window.
 Kept: the current calendar month in Asia/Kolkata, plus SELFIE_RETENTION_MONTHS
 previous calendar months (default 1). Anything taken before 00:00 IST on the
-first day of that window is deleted.
+first day of that window is deleted. A break photo is judged by its own start
+or end time. Enrolment photos and avatars are not part of this rule.
 
 Examples with the default (1):
   15 Dec -> keep from 1 Nov onward

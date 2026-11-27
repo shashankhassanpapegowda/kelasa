@@ -49,6 +49,13 @@ def _match(doc, query):
             continue
         value = doc.get(key)
         if isinstance(expected, dict):
+            if "$elemMatch" in expected:
+                items = value if isinstance(value, list) else []
+                if not any(_match(item, expected["$elemMatch"]) for item in items if isinstance(item, dict)):
+                    return False
+                expected = {k: v for k, v in expected.items() if k != "$elemMatch"}
+                if not expected:
+                    continue
             if "$ne" in expected and value == expected["$ne"]:
                 return False
             if "$in" in expected and value not in expected["$in"]:
@@ -325,6 +332,105 @@ class TestPurge:
         assert db.attendance.docs[0]["check_in_photo_path"] == "keep-me"
         assert db.attendance.updates == []
 
+    def test_break_photos_are_judged_on_their_own_timestamp(self, monkeypatch):
+        now = ist(2026, 12, 15, 15)
+
+        def brk(start, end, start_path, end_path):
+            return {
+                "break_id": "b1",
+                "start": utc_iso(start) if start else "2020-not-a-date",
+                "end": utc_iso(end) if end else None,
+                "start_photo_path": start_path,
+                "end_photo_path": end_path,
+            }
+
+        docs = [
+            {**_record("split-break", ist(2026, 11, 20, 9), ist(2026, 11, 20, 18), "punch-in", "punch-out"),
+             "breaks": [brk(ist(2026, 10, 31, 23), ist(2026, 11, 20, 12), "old-start", "new-end")]},
+            {**_record("old-breaks", ist(2026, 12, 2, 9), ist(2026, 12, 2, 18), "dec-in", "dec-out"),
+             "breaks": [brk(ist(2026, 10, 1, 10), ist(2026, 10, 1, 11), "old-b-start", "old-b-end")]},
+            {**_record("old-punch-new-break", ist(2026, 10, 15, 9), ist(2026, 10, 15, 18), "old-punch-in", "old-punch-out"),
+             "breaks": [brk(ist(2026, 11, 2, 10), ist(2026, 11, 2, 10, 30), "keep-b-start", "keep-b-end")]},
+            {**_record("auto", ist(2026, 9, 1, 9), ist(2026, 9, 1, 18), None, None),
+             "auto_closed": True,
+             "breaks": [brk(ist(2026, 9, 1, 12), ist(2026, 9, 1, 13), "auto-start", None)]},
+            {**_record("fresh-break", ist(2026, 12, 10, 9), ist(2026, 12, 10, 18), None, None),
+             "breaks": [brk(ist(2026, 12, 10, 13), ist(2026, 12, 10, 13, 20), "fresh-start", "fresh-end")]},
+            {**_record("bad-stamp", ist(2026, 12, 10, 9), ist(2026, 12, 10, 12), "keep-in", "keep-out"),
+             "breaks": [{"start": "2020-not-a-date", "start_photo_path": "weird", "end": None, "end_photo_path": None}]},
+        ]
+        cleared, db, scrubbed = asyncio.run(_purge(monkeypatch, docs, now=now))
+        by_id = {d["record_id"]: d for d in db.attendance.docs}
+
+        assert cleared == 4
+        assert set(scrubbed) == {
+            "old-start", "old-b-start", "old-b-end", "old-punch-in", "old-punch-out", "auto-start",
+        }
+        assert f"{APP}/enrollment/emp_a/face.jpg" not in scrubbed
+        assert f"{APP}/avatars/emp_a/ava.jpg" not in scrubbed
+        assert db.users.docs[0]["face_photo_path"].endswith("face.jpg")
+        assert db.users.docs[0]["avatar_path"].endswith("ava.jpg")
+
+        split = by_id["split-break"]["breaks"][0]
+        assert split["start_photo_path"] is None and split["start_photo_purged"] is True
+        assert split["end_photo_path"] == "new-end" and not split.get("end_photo_purged")
+        assert by_id["split-break"]["check_in_photo_path"] == "punch-in"
+        assert by_id["split-break"]["check_out_photo_path"] == "punch-out"
+        assert by_id["split-break"]["photos_purged_at"]
+
+        old = by_id["old-breaks"]
+        assert old["check_in_photo_path"] == "dec-in" and old["check_out_photo_path"] == "dec-out"
+        assert old["breaks"][0]["start_photo_path"] is None and old["breaks"][0]["end_photo_path"] is None
+        assert old["breaks"][0]["start_photo_purged"] is True and old["breaks"][0]["end_photo_purged"] is True
+
+        kept_break = by_id["old-punch-new-break"]
+        assert kept_break["check_in_photo_path"] is None and kept_break["check_out_photo_path"] is None
+        assert kept_break["breaks"][0]["start_photo_path"] == "keep-b-start"
+        assert kept_break["breaks"][0]["end_photo_path"] == "keep-b-end"
+        assert not kept_break["breaks"][0].get("start_photo_purged")
+
+        auto = by_id["auto"]["breaks"][0]
+        assert auto["start_photo_path"] is None and auto["start_photo_purged"] is True
+        assert auto["end_photo_path"] is None and not auto.get("end_photo_purged")
+
+        assert by_id["fresh-break"]["breaks"][0]["start_photo_path"] == "fresh-start"
+        assert by_id["fresh-break"]["breaks"][0]["end_photo_path"] == "fresh-end"
+        assert "photos_purged_at" not in by_id["fresh-break"]
+        assert by_id["bad-stamp"]["breaks"][0]["start_photo_path"] == "weird"
+        assert "photos_purged_at" not in by_id["bad-stamp"]
+
+    def test_day_payload_keeps_break_photo_paths_and_purged_markers(self):
+        purge = inspect.getsource(server.run_selfie_purge)
+        assert "breaks" in server.SESSION_KEYS
+        for key in ("check_in_lat", "check_in_lng", "check_out_lat", "check_out_lng",
+                    "check_in_photo_path", "check_out_photo_path", "photos_purged_at"):
+            assert key in server.SESSION_KEYS
+        assert "start_photo_path" in purge and "end_photo_path" in purge
+        assert "_photo_purged" in purge
+        assert "SESSION_KEYS" in inspect.getsource(server.build_calendar)
+        rec = {
+            "breaks": [{
+                "start_photo_path": "break-start.jpg",
+                "end_photo_path": None,
+                "end_photo_purged": True,
+                "start_lat": 12.97,
+                "start_lng": 77.59,
+            }],
+            "photos_purged_at": "2026-12-15T00:00:00+00:00",
+            "check_in_photo_path": "in.jpg",
+            "check_in_lat": 12.9716,
+            "check_in_lng": 77.5946,
+            "check_out_lat": 12.98,
+            "check_out_lng": 77.60,
+        }
+        session = {k: rec.get(k) for k in server.SESSION_KEYS}
+        assert session["breaks"][0]["start_photo_path"] == "break-start.jpg"
+        assert session["breaks"][0]["end_photo_purged"] is True
+        assert session["breaks"][0]["start_lat"] == 12.97
+        assert session["photos_purged_at"]
+        assert session["check_in_photo_path"] == "in.jpg"
+        assert session["check_in_lat"] == 12.9716 and session["check_out_lng"] == 77.60
+
 
 # ---------- who can fetch a selfie ----------
 def _seed_people():
@@ -377,6 +483,18 @@ class TestPhotoAccess:
             assert own_out.status_code == 200
             assert own_in.media_type == "image/jpeg"
             assert fetched == [checkin, checkout]
+
+            break_start = _photo("emp_a", "break_start")
+            break_end = _photo("emp_a", "break_end")
+            assert (await _fetch(break_start, "tok_emp_a")).status_code == 200
+            assert (await _fetch(break_end, "tok_sub_in")).status_code == 200
+            assert (await _fetch(break_start, "tok_sub_mgr")).status_code == 200
+            with pytest.raises(HTTPException) as other_break:
+                await _fetch(break_end, "tok_emp_b")
+            assert other_break.value.status_code == 403
+            with pytest.raises(HTTPException) as outside_break:
+                await _fetch(break_start, "tok_sub_out")
+            assert outside_break.value.status_code == 403
 
             with pytest.raises(HTTPException) as other:
                 await _fetch(checkin, "tok_emp_b")

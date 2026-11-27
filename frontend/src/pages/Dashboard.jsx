@@ -144,15 +144,24 @@ export default function Dashboard() {
     };
   }, [active?.record_id, active?.on_break]);
 
+  const locationError = (e) => (/timeout/i.test(e?.message || "")
+    ? "Couldn't get your location in time. Step outside or turn on Precise Location, then try again."
+    : (e?.message || "Could not get your location."));
+
+  const acquirePosition = async () => {
+    const recent = lastFixRef.current;
+    const g = recent && Date.now() - recent.at < 60000 && (recent.accuracy ?? 999) <= 150
+      ? recent : await getAccuratePosition({ desiredAccuracy: 30, fallbackAccuracy: 150, maxWait: 15000 });
+    if (g.accuracy > 200) {
+      toast.warning(`Low GPS accuracy (±${Math.round(g.accuracy)}m). Move outside / enable Precise Location.`);
+    }
+    return g;
+  };
+
   const startCheck = async (mode) => {
     setBusy(true);
     try {
-      const recent = lastFixRef.current;
-      const g = recent && Date.now() - recent.at < 60000 && (recent.accuracy ?? 999) <= 150
-        ? recent : await getAccuratePosition({ desiredAccuracy: 30, fallbackAccuracy: 150, maxWait: 15000 });
-      if (g.accuracy > 200) {
-        toast.warning(`Low GPS accuracy (±${Math.round(g.accuracy)}m). Move outside / enable Precise Location.`);
-      }
+      const g = await acquirePosition();
       const z = zoneFor(fence, g);
       setZone(z);
       if (z && !z.inside) {
@@ -163,7 +172,21 @@ export default function Dashboard() {
       setFaceMode(mode);
       setFaceOpen(true);
     } catch (e) {
-      toast.error(/timeout/i.test(e?.message || "") ? "Couldn't get your location in time. Step outside or turn on Precise Location, then try again." : (e?.message || "Could not get your location."));
+      toast.error(locationError(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const startBreak = async (action) => {
+    setBusy(true);
+    try {
+      const g = await acquirePosition();
+      setPendingGeo(g);
+      setFaceMode(action === "start" ? "break_start" : "break_end");
+      setFaceOpen(true);
+    } catch (e) {
+      toast.error(locationError(e));
     } finally {
       setBusy(false);
     }
@@ -172,7 +195,11 @@ export default function Dashboard() {
   const handleFaceCapture = async ({ image_b64 }) => {
     const payload = { lat: pendingGeo.lat, lng: pendingGeo.lng, accuracy: pendingGeo.accuracy, image_b64 };
     try {
-      if (faceMode === "in") {
+      if (faceMode === "break_start" || faceMode === "break_end") {
+        const starting = faceMode === "break_start";
+        await api.post(starting ? "/attendance/break/start" : "/attendance/break/end", payload);
+        toast.success(starting ? "Break started — tracking paused." : "Break ended — tracking resumed.");
+      } else if (faceMode === "in") {
         const res = await api.post("/attendance/checkin", payload);
         if (res.data.late_by_minutes > 0) {
           toast.warning(`Checked in — you are ${res.data.late_by_minutes} min late.`);
@@ -188,25 +215,6 @@ export default function Dashboard() {
       await refresh();
     } catch (e) {
       throw e;
-    }
-  };
-
-  const handleBreak = async (action) => {
-    setBusy(true);
-    try {
-      let pos = {};
-      try {
-        const g = await getAccuratePosition({ desiredAccuracy: 100, maxWait: 8000 });
-        pos = { lat: g.lat, lng: g.lng };
-      } catch (_) { /* break location is optional */ }
-      const url = action === "start" ? "/attendance/break/start" : "/attendance/break/end";
-      await api.post(url, pos);
-      toast.success(action === "start" ? "Break started — tracking paused." : "Break ended — tracking resumed.");
-      await refresh();
-    } catch (e) {
-      toast.error(e?.response?.data?.detail || "Failed");
-    } finally {
-      setBusy(false);
     }
   };
 
@@ -306,13 +314,13 @@ export default function Dashboard() {
                       <span className="font-medium">Check Out</span>
                     </button>
                     {!onBreak ? (
-                      <button onClick={() => handleBreak("start")} disabled={busy} data-testid="break-start-btn"
+                      <button onClick={() => startBreak("start")} disabled={busy} data-testid="break-start-btn"
                         className="border border-border bg-card px-5 py-4 inline-flex items-center gap-2 hover:bg-secondary disabled:opacity-50">
                         <Coffee size={16} weight="bold"/>
                         <span className="font-medium">Start Break</span>
                       </button>
                     ) : (
-                      <button onClick={() => handleBreak("end")} disabled={busy} data-testid="break-end-btn"
+                      <button onClick={() => startBreak("end")} disabled={busy} data-testid="break-end-btn"
                         className="bg-yellow-400 text-black px-5 py-4 inline-flex items-center gap-2 hover:bg-yellow-300 disabled:opacity-50">
                         <ArrowCounterClockwise size={16} weight="bold"/>
                         <span className="font-medium">End Break · Resume</span>
@@ -338,7 +346,7 @@ export default function Dashboard() {
               )}
               <p className="mt-3 text-xs text-muted-foreground flex items-start gap-1.5 max-w-md">
                 <WarningCircle size={14} weight="bold" className="mt-0.5 shrink-0"/>
-                <span>Allow camera + <strong>Precise Location</strong>. Location tracking pauses during breaks.</span>
+                <span>Allow camera + <strong>Precise Location</strong>. A selfie is required to check in, check out, start a break and resume. Location tracking pauses during breaks.</span>
               </p>
             </div>
 
@@ -412,15 +420,22 @@ export default function Dashboard() {
 
       <SelfieCapture
         open={faceOpen}
-        title={faceMode === "in" ? "Check-In Selfie" : "Check-Out Selfie"}
-        subtitle={faceMode === "in" ? "Take a quick selfie to start your duty session." : "Take a quick selfie to end your duty session."}
-        cta={faceMode === "in" ? "Check In" : "Check Out"}
+        title={FACE_COPY[faceMode].title}
+        subtitle={FACE_COPY[faceMode].subtitle}
+        cta={FACE_COPY[faceMode].cta}
         onClose={() => { setFaceOpen(false); setPendingGeo(null); }}
         onCapture={handleFaceCapture}
       />
     </div>
   );
 }
+
+const FACE_COPY = {
+  in: { title: "Check-In Selfie", subtitle: "Take a quick selfie to start your duty session.", cta: "Check In" },
+  out: { title: "Check-Out Selfie", subtitle: "Take a quick selfie to end your duty session.", cta: "Check Out" },
+  break_start: { title: "Start break selfie", subtitle: "Take a selfie to start your break. Tracking stays paused until you resume.", cta: "Start Break" },
+  break_end: { title: "Resume duty selfie", subtitle: "Take a selfie to end your break and resume duty.", cta: "Resume" },
+};
 
 const Stat = ({ label, value, testid, full }) => (
   <div className={`p-6 border-b border-border lg:border-b ${full ? "col-span-2 lg:col-span-1" : ""}`}>
