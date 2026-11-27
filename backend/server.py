@@ -40,7 +40,7 @@ from work_timing import (
     validate_grace, validate_override, validate_week,
 )
 from staff_rules import (
-    PAID_LEAVE_CODE, PAID_LEAVE_NAME, announcement_push_user_ids, announcement_visible,
+    PAID_LEAVE_CODE, PAID_LEAVE_NAME, announcement_push_user_ids, select_announcements,
     classify_leave_days, correction_window_error, empty_span_message, leave_warning_dates,
     absent_people_for, project_month_summary,
 )
@@ -2873,13 +2873,10 @@ def _announcement_target(user: dict, payload: AnnouncementIn) -> tuple:
 
 @api_router.get("/announcements")
 async def list_announcements(user: dict = Depends(get_current_user), limit: int = 20):
-    # Filter before the limit so a company-wide pin the viewer cannot see does not hide their own notice.
-    docs = await db.announcements.find({}, {"_id": 0}).sort([("pinned", -1), ("created_at", -1)]).to_list(500)
-    visible = [d for d in docs if announcement_visible(d, user)][: max(1, min(limit, 100))]
-    for doc in visible:
-        doc["audience"] = doc.get("audience") or "all"
-        doc["branches"] = doc.get("branches") or []
-    return {"announcements": visible}
+    # Read every notice, then filter. A query that required `audience` would hide
+    # pre-existing documents that have no audience field, including from an admin.
+    docs = await db.announcements.find({}, {"_id": 0}).to_list(500)
+    return {"announcements": select_announcements(docs, user, limit)}
 
 @api_router.post("/admin/announcements")
 async def add_announcement(payload: AnnouncementIn, user: dict = Depends(require_manager)):

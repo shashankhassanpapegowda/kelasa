@@ -10,6 +10,7 @@ from payroll_ndp import days_paid
 from staff_rules import (
     absent_people_for, announcement_push_user_ids, announcement_visible,
     classify_leave_days, correction_window_error, leave_warning_dates, project_month_summary,
+    select_announcements,
 )
 
 ZERO = Decimal("0")
@@ -186,6 +187,46 @@ def test_announcement_branch_targeting_hides_and_skips_other_branches():
     assert announcement_visible({}, yard)  # older notices are company-wide
     recipients = announcement_push_user_ids(notice, [hq, yard, sub, admin], author_id="admin")
     assert recipients == {"hq"}
+
+
+def test_legacy_notice_without_audience_is_visible_to_admin_and_everyone():
+    # A document created before branch targeting: no audience and no branches keys at all.
+    legacy = {
+        "announcement_id": "ann_legacy",
+        "title": "Office closed Friday",
+        "body": "The yard is shut.",
+        "pinned": True,
+        "author_id": "user_old_admin",
+        "author_name": "Admin",
+        "created_at": "2026-08-15T04:30:00+00:00",
+        "notify_phones": True,
+    }
+    assert "audience" not in legacy
+    assert "branches" not in legacy
+    branch_only = {
+        "announcement_id": "ann_hq",
+        "title": "HQ only",
+        "body": "Ignore elsewhere",
+        "pinned": False,
+        "audience": "branches",
+        "branches": ["Bengaluru HQ"],
+        "created_at": "2026-11-01T00:00:00+00:00",
+    }
+    admin = {"role": "admin", "user_id": "admin", "site": "Tumkur Yard"}
+    employee = {"role": "employee", "user_id": "yard", "site": "Tumkur Yard"}
+    sub = {"role": "sub_admin", "user_id": "sub", "managed_sites": ["Tumkur Yard"], "site": "Tumkur Yard"}
+    for viewer in (admin, employee, sub):
+        shown = select_announcements([legacy], viewer, limit=20)
+        assert [row["announcement_id"] for row in shown] == ["ann_legacy"]
+        assert shown[0]["audience"] == "all"
+        assert shown[0]["branches"] == []
+        assert announcement_visible(legacy, viewer)
+    # Admin still sees a branch notice and the legacy company notice. Another branch does not see the branch notice.
+    admin_rows = select_announcements([branch_only, legacy], admin, limit=20)
+    assert {row["announcement_id"] for row in admin_rows} == {"ann_legacy", "ann_hq"}
+    assert admin_rows[0]["announcement_id"] == "ann_legacy"  # pinned legacy notice stays first
+    yard_rows = select_announcements([branch_only, legacy], employee, limit=1)
+    assert [row["announcement_id"] for row in yard_rows] == ["ann_legacy"]
 
 
 def test_absent_today_is_branch_isolated():

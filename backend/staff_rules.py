@@ -128,32 +128,82 @@ def correction_window_error(day: date, today: date, limit: int = CORRECTION_WIND
     return None
 
 
+def announcement_branches(doc: dict) -> list:
+    """Branch names on a notice. Missing, null, or a non-list is no branches."""
+    raw = doc.get("branches") if isinstance(doc, dict) else None
+    if isinstance(raw, str):
+        text = raw.strip()
+        return [text] if text else []
+    if not isinstance(raw, (list, tuple)):
+        return []
+    return [b.strip() for b in raw if isinstance(b, str) and b.strip()]
+
+
+def normalize_announcement(doc: dict) -> dict:
+    """Legacy notices (no audience field) are company-wide. A branch notice with no names is too."""
+    out = dict(doc or {})
+    branches = announcement_branches(out)
+    audience = out.get("audience")
+    if audience == "branches" and branches:
+        out["audience"] = "branches"
+        out["branches"] = branches
+    else:
+        out["audience"] = "all"
+        out["branches"] = []
+    created = out.get("created_at")
+    if created is not None and not isinstance(created, str) and hasattr(created, "isoformat"):
+        out["created_at"] = created.isoformat()
+    return out
+
+
 def announcement_visible(doc: dict, user: dict) -> bool:
-    """Who can read a notice. Missing audience is company-wide, same as older documents."""
-    audience = doc.get("audience") or "all"
-    branches = [b for b in (doc.get("branches") or []) if b]
-    company = audience != "branches" or not branches
-    role = user.get("role")
+    """Who can read a notice. Missing audience is company-wide, same as older documents.
+
+    Admins see every notice. Everyone else sees company-wide notices plus branch
+    notices that name their site (or, for a sub-admin, a branch they manage).
+    """
+    notice = normalize_announcement(doc)
+    role = (user or {}).get("role")
     if role == "admin":
         return True
-    if role == "sub_admin":
-        if company:
-            return True
-        mine = set(user.get("managed_sites") or [])
-        return bool(mine & set(branches))
-    if company:
+    if notice["audience"] != "branches":
         return True
-    return (user.get("site") or "") in branches
+    branches = set(notice["branches"])
+    if role == "sub_admin":
+        return bool(set((user or {}).get("managed_sites") or []) & branches)
+    return ((user or {}).get("site") or "") in branches
+
+
+def select_announcements(docs: Iterable[dict], user: dict, limit: int = 20) -> list:
+    """Pinned first, then newest. Filter only after the full read so a legacy notice is not dropped."""
+    rows = [normalize_announcement(doc) for doc in docs or []]
+
+    def sort_key(doc):
+        created = doc.get("created_at") or ""
+        if not isinstance(created, str):
+            created = str(created)
+        return (1 if doc.get("pinned") else 0, created)
+
+    rows.sort(key=sort_key, reverse=True)
+    if (user or {}).get("role") == "admin":
+        chosen = rows
+    else:
+        chosen = [doc for doc in rows if announcement_visible(doc, user)]
+    try:
+        cap = int(limit)
+    except (TypeError, ValueError):
+        cap = 20
+    return chosen[: max(1, min(cap, 100))]
 
 
 def announcement_push_user_ids(doc: dict, users: Iterable[dict], author_id: Optional[str] = None) -> set:
     """Devices to notify. Company-wide reaches everyone except the author.
     A branch notice reaches that branch, and sub-admins who manage it — not staff elsewhere.
+    A notice with no audience is company-wide.
     """
-    audience = doc.get("audience") or "all"
-    branches = [b for b in (doc.get("branches") or []) if b]
-    company = audience != "branches" or not branches
-    wanted = set(branches)
+    notice = normalize_announcement(doc)
+    company = notice["audience"] != "branches"
+    wanted = set(notice["branches"])
     out = set()
     for user in users:
         uid = user.get("user_id")
